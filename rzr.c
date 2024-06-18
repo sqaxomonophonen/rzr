@@ -1942,36 +1942,31 @@ static void test_rzr(void)
 	const int height = 32;
 	struct rzr* rzr = getrz(width/2, width, height, 6);
 	Circle(1.0f);
-	Circle(0.5f);
-	Difference();
-	#if 0
-	Circle(1.0f);
 	Circle(0.9f);
 	Difference();
-	Circle(0.8f);
+	Star(5, 0.9f, 0.3f);
 	Union();
-	Circle(0.7f);
-	Difference();
-	Circle(0.6f);
-	Union();
-	Circle(0.5f);
-	Difference();
-	#endif
-	#if 0
 	uint8_t scratch[1<<18];
 	const size_t scratch_sz = sizeof(scratch);
-	#else
-	const size_t scratch_sz = 1<<20;
-	uint8_t* scratch = malloc(scratch_sz);
-	#endif
 	uint8_t pixels[width*height];
 	memset(pixels, 0xfe, sizeof pixels);
 	rzr_render(rzr, scratch_sz, scratch, width, pixels);
-	uint8_t* p = pixels;
 	for (int y = 0; y < height; y++) {
-		for (int x = 0; x < width; x++) {
-			const int v = *(p++);
-			printf("%.2x", v);
+		{
+			uint8_t* p = pixels + y*width;
+			for (int x = 0; x < width; x++) {
+				const int v = *(p++);
+				printf("%.2x", v);
+			}
+		}
+		printf("   ");
+		{
+			uint8_t* p = pixels + y*width;
+			for (int x = 0; x < width; x++) {
+				const int v = *(p++);
+				const char c = " .:ioVM@"[v>>5];
+				printf("%c%c", c, c);
+			}
 		}
 		printf("\n");
 	}
