@@ -1011,10 +1011,10 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					assert(!"unreachable");
 				}
 				assert(xedge != NULL);
-				xedge->denominator = yspan->y1 - yspan->y0;
-
 				xedge->y0 = yspan->y0;
 				xedge->x = x0;
+				xedge->denominator = yspan->y1 - yspan->y0 + 1;
+
 				if (x1 > x0) {
 					xedge->numerator = x1-x0;
 					xedge->xstep = 1;
@@ -1022,6 +1022,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					xedge->numerator = x0-x1;
 					xedge->xstep = -1;
 				}
+				assert(xedge->denominator > 0);
 			}
 			assert(n_left == n_right);
 			assert(n_left > 0 && n_right > 0);
@@ -1936,21 +1937,8 @@ static void test_subrender(void)
 	#undef RTEST
 }
 
-static void test_rzr(void)
+static void bitmap_ascii_dump(int width, int height, uint8_t* pixels)
 {
-	const int width = 32;
-	const int height = 32;
-	struct rzr* rzr = getrz(width/2, width, height, 6);
-	Circle(1.0f);
-	Circle(0.9f);
-	Difference();
-	Star(5, 0.9f, 0.3f);
-	Union();
-	uint8_t scratch[1<<18];
-	const size_t scratch_sz = sizeof(scratch);
-	uint8_t pixels[width*height];
-	memset(pixels, 0xfe, sizeof pixels);
-	rzr_render(rzr, scratch_sz, scratch, width, pixels);
 	for (int y = 0; y < height; y++) {
 		{
 			uint8_t* p = pixels + y*width;
@@ -1970,6 +1958,24 @@ static void test_rzr(void)
 		}
 		printf("\n");
 	}
+}
+
+static void test_rzr(void)
+{
+	const int width = 32;
+	const int height = 32;
+	struct rzr* rzr = getrz(width/2, width, height, 16);
+	Circle(1.0f);
+	Circle(0.9f);
+	Difference();
+	Star(8, 0.9f, 0.3f);
+	Union();
+	uint8_t scratch[1<<18];
+	const size_t scratch_sz = sizeof(scratch);
+	uint8_t pixels[width*height];
+	memset(pixels, 0xfe, sizeof pixels);
+	rzr_render(rzr, scratch_sz, scratch, width, pixels);
+	bitmap_ascii_dump(width, height, pixels);
 }
 
 int main(int argc, char** argv)
