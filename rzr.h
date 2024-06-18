@@ -184,7 +184,7 @@ static inline void rzr_pick(struct rzr* rzr, int stack_index)
 }
 
 static inline void rzr_dup(struct rzr* rzr) { rzr_pick(rzr, -1); }
-static inline void rzr_swap(struct rzr* rzr) { rzr_op(rzr, RZROP_PICK); }
+static inline void rzr_swap(struct rzr* rzr) { rzr_op(rzr, RZROP_SWAP); }
 static inline void rzr_drop(struct rzr* rzr) { rzr_op(rzr, RZROP_DROP); }
 
 static inline void rzr_circle(struct rzr* rzr, float radius)
@@ -237,9 +237,54 @@ static inline void rzr_star(struct rzr* rzr, int n, float outer_radius, float in
 	rzr_end_poly(rzr);
 }
 
-void rzr_union(struct rzr* rzr)        { rzr_op(rzr, RZROP_UNION); }
-void rzr_intersection(struct rzr* rzr) { rzr_op(rzr, RZROP_INTERSECTION); }
-void rzr_difference(struct rzr* rzr)   { rzr_op(rzr, RZROP_DIFFERENCE); }
+static inline void rzr_pattern(struct rzr* rzr, float* ws)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_line(struct rzr* rzr, float width)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_split(struct rzr* rzr)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_box(struct rzr* rzr, float width, float height)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_rounded_box(struct rzr* rzr, float width, float height, float radius)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_arc(struct rzr* rzr, float aperture_degrees, float radius, float width)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_segment(struct rzr* rzr, float x0, float y0, float x1, float y1, float r)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_isosceles_triangle(struct rzr* rzr, float w, float h)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_isosceles_trapezoid(struct rzr* rzr, float r1, float r2, float h)
+{
+	assert(!"TODO");
+}
+
+static inline void rzr_union(struct rzr* rzr)        { rzr_op(rzr, RZROP_UNION); }
+static inline void rzr_intersection(struct rzr* rzr) { rzr_op(rzr, RZROP_INTERSECTION); }
+static inline void rzr_difference(struct rzr* rzr)   { rzr_op(rzr, RZROP_DIFFERENCE); }
 
 void rzr_render(struct rzr*, size_t scratch_cap, void* scratch, int stride, uint8_t* pixels);
 
@@ -267,23 +312,21 @@ void rzr_render(struct rzr*, size_t scratch_cap, void* scratch, int stride, uint
 #define EndPoly()                    rzr_end_poly(RZR_INSTANCE)
 
 #define Star(n,o,i)                  rzr_star(RZR_INSTANCE,n,o,i)
+#define Pattern(...)                 rzr_pattern(RZR_INSTANCE,(float[]) { __VA_ARGS__, 0 })
+#define Line(w)                      rzr_line(RZR_INSTANCE,w)
+#define Split(w)                     rzr_split(RZR_INSTANCE)
+#define Arc(a,r,w)                   rzr_arc(RZR_INSTANCE,a,r,w)
+#define Box(w,h)                     rzr_box(RZR_INSTANCE,w,h)
+#define RoundedBox(w,h,r)            rzr_rounded_box(RZR_INSTANCE,w,h,r)
+#define Segment(x0,y0,x1,y1,r)       rzr_segment(RZR_INSTANCE,x0,y0,x1,y1,r)
+#define IsoscelesTriangle(w,h)       rzr_isosceles_triangle(RZR_INSTANCE,w,h)
+#define IsoscelesTrapezoid(r1,r2,h)  rzr_isosceles_trapezoid(RZR_INSTANCE,r1,r2,h)
 
 //#define Simplify(n,e)                              rzr_simplify(RZR_INSTANCE,n,e)
 //#define CubicBezier(x0,y0,c0x,c0y,c1x,c1y,x1,y1)   rzr_cubic_bezier(RZR_INSTANCE,x0,y0,c0x,c0y,c1x,c1y,x1,y1)
 // TODO I think curve and simplification should be something separate, maybe
 // combined... but something that emits the proper Vertex() calls
 
-#if 0
-#define Arc(a,r,w)                   rzr_arc(RZR_INSTANCE,a,r,w)
-#define Box(w,h)                     rzr_box(RZR_INSTANCE,w,h)
-#define RoundedBox(w,h,r)            rzr_rounded_box(RZR_INSTANCE,w,h,r)
-#define Line(w)                      rzr_line(RZR_INSTANCE,w)
-#define Segment(x0,y0,x1,y1,r)       rzr_segment(RZR_INSTANCE,x0,y0,x1,y1,r)
-#define IsoscelesTriangle(w,h)       rzr_isosceles_triangle(RZR_INSTANCE,w,h)
-#define IsoscelesTrapezoid(r1,r2,h)  rzr_isosceles_trapezoid(RZR_INSTANCE,r1,r2,h)
-#define Split(w)                     rzr_split(RZR_INSTANCE)
-#define Pattern(...)                 rzr_pattern(RZR_INSTANCE,(float[]) { __VA_ARGS__, 0 })
-#endif
 
 #define Union()                      rzr_union(RZR_INSTANCE)
 #define Intersection()               rzr_intersection(RZR_INSTANCE)

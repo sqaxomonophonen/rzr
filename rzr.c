@@ -316,6 +316,7 @@ static inline void scratch_restore(struct scratch* s, const struct scratch* save
 
 static struct scratch setup_scratch(size_t cap, void* base)
 {
+	assert(base != NULL);
 	return (struct scratch) {
 		.cap    = cap,
 		.base   = base,
