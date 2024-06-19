@@ -4,7 +4,9 @@
 TODO:
  - allow out-of-memory errors without crashing?
  - more convenienct shapes
-
+FIXME:
+ - A circle precalcs/stores a number of values equal to its subpixel radius
+   regardless of image size.
 */
 
 #include <assert.h>
@@ -187,6 +189,10 @@ static inline void rzr_dup(struct rzr* rzr) { rzr_pick(rzr, -1); }
 static inline void rzr_swap(struct rzr* rzr) { rzr_op(rzr, RZROP_SWAP); }
 static inline void rzr_drop(struct rzr* rzr) { rzr_op(rzr, RZROP_DROP); }
 
+static inline void rzr_union(struct rzr* rzr)        { rzr_op(rzr, RZROP_UNION); }
+static inline void rzr_intersection(struct rzr* rzr) { rzr_op(rzr, RZROP_INTERSECTION); }
+static inline void rzr_difference(struct rzr* rzr)   { rzr_op(rzr, RZROP_DIFFERENCE); }
+
 static inline void rzr_circle(struct rzr* rzr, float radius)
 {
 	struct rzr_op* op = rzr_op(rzr, RZROP_CIRCLE);
@@ -219,8 +225,8 @@ static inline void rzr_vertex(struct rzr* rzr, float x, float y)
 	assert(rzr->in_poly);
 	struct rzr_op* op = rzr_op(rzr, RZROP_VERTEX);
 	struct rzr_tx* tx = rzr_get_current_tx(rzr);
-	op->vertex.x = rzr_float_to_int(tx->origin_x + x*tx->basis0_x - x*tx->basis0_y);
-	op->vertex.y = rzr_float_to_int(tx->origin_y + y*tx->basis0_y + y*tx->basis0_x);
+	op->vertex.x = rzr_float_to_int(tx->origin_x + x*tx->basis0_x - y*tx->basis0_y);
+	op->vertex.y = rzr_float_to_int(tx->origin_y + x*tx->basis0_y + y*tx->basis0_x);
 }
 
 static inline void rzr_star(struct rzr* rzr, int n, float outer_radius, float inner_radius)
@@ -239,7 +245,32 @@ static inline void rzr_star(struct rzr* rzr, int n, float outer_radius, float in
 
 static inline void rzr_pattern(struct rzr* rzr, float* ws)
 {
-	assert(!"TODO");
+	int n=0;
+	float ww = 0.0f;
+	float* p = ws;
+	while (*p > 0) { ww+=*p ; p++; n++; }
+	assert(((n&1) == 0) && "ws count must be even");
+	assert((n >= 2) && "empty pattern");
+	assert(ww > 0.0f);
+
+	float x = 0.0f;
+	p = ws;
+	int ns = 0;
+	const float y0 = -1.0f;
+	const float y1 =  1.0f;
+	for (int i = 0; i < n; i++) {
+		const float w = *(p++);
+		if ((i&1) == 0) {
+			rzr_begin_poly(rzr);
+			rzr_vertex(rzr, x   , y0);
+			rzr_vertex(rzr, x+w , y0);
+			rzr_vertex(rzr, x+w , y1);
+			rzr_vertex(rzr, x   , y1);
+			rzr_end_poly(rzr);
+			if (ns++) rzr_union(rzr);
+		}
+		x += w;
+	}
 }
 
 static inline void rzr_line(struct rzr* rzr, float width)
@@ -282,9 +313,6 @@ static inline void rzr_isosceles_trapezoid(struct rzr* rzr, float r1, float r2, 
 	assert(!"TODO");
 }
 
-static inline void rzr_union(struct rzr* rzr)        { rzr_op(rzr, RZROP_UNION); }
-static inline void rzr_intersection(struct rzr* rzr) { rzr_op(rzr, RZROP_INTERSECTION); }
-static inline void rzr_difference(struct rzr* rzr)   { rzr_op(rzr, RZROP_DIFFERENCE); }
 
 void rzr_render(struct rzr*, size_t scratch_cap, void* scratch, int stride, uint8_t* pixels);
 
@@ -294,16 +322,20 @@ void rzr_render(struct rzr*, size_t scratch_cap, void* scratch, int stride, uint
 #define RZR_INSTANCE (rzr)
 #endif
 
-#define Dup()                        rzr_dup(RZR_INSTANCE)
-#define Pick(i)                      rzr_pick(RZR_INSTANCE,i)
-#define Swap()                       rzr_swap(RZR_INSTANCE)
-#define Drop()                       rzr_drop(RZR_INSTANCE)
-
 #define Save()                       rzr_tx_save(RZR_INSTANCE)
 #define Restore()                    rzr_tx_restore(RZR_INSTANCE)
 #define Translate(x,y)               rzr_tx_translate(RZR_INSTANCE,x,y)
 #define Rotate(degrees)              rzr_tx_rotate(RZR_INSTANCE,degrees)
 #define Scale(scalar)                rzr_tx_scale(RZR_INSTANCE,scalar)
+
+#define Dup()                        rzr_dup(RZR_INSTANCE)
+#define Pick(i)                      rzr_pick(RZR_INSTANCE,i)
+#define Swap()                       rzr_swap(RZR_INSTANCE)
+#define Drop()                       rzr_drop(RZR_INSTANCE)
+
+#define Union()                      rzr_union(RZR_INSTANCE)
+#define Intersection()               rzr_intersection(RZR_INSTANCE)
+#define Difference()                 rzr_difference(RZR_INSTANCE)
 
 #define Circle(r)                    rzr_circle(RZR_INSTANCE,r)
 
@@ -326,11 +358,6 @@ void rzr_render(struct rzr*, size_t scratch_cap, void* scratch, int stride, uint
 //#define CubicBezier(x0,y0,c0x,c0y,c1x,c1y,x1,y1)   rzr_cubic_bezier(RZR_INSTANCE,x0,y0,c0x,c0y,c1x,c1y,x1,y1)
 // TODO I think curve and simplification should be something separate, maybe
 // combined... but something that emits the proper Vertex() calls
-
-
-#define Union()                      rzr_union(RZR_INSTANCE)
-#define Intersection()               rzr_intersection(RZR_INSTANCE)
-#define Difference()                 rzr_difference(RZR_INSTANCE)
 
 #endif
 

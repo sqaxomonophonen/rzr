@@ -405,7 +405,10 @@ static void subrender(uint8_t* out_pixels, int width, int ss, struct spanline* s
 				}
 				struct span* span = &line->spans[c];
 				const int sxx0 = span->x;
+				assert(sxx0 >= 0);
+				assert(span->w > 0);
 				const int sxx1 = sxx0 + span->w - 1;
+				assert(sxx1 < ss*width);
 				if (sxx1 < xx0) {
 					// current span lies before current
 					// pixel cell; advance cursor
@@ -638,6 +641,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		yspan->ysi_a = YSLI_A; \
 		yspan->ysi_b = YSLI_B; \
 		yspan_lists[yspan_list_index-1].n++; \
+		assert(yspan_lists[yspan_list_index-1].n < 2 || yspan->y0 > (yspan-1)->y1); \
 		/* printf("push yspan(pc=%d,[%d;%d],a=%d,b=%d)\n", yspan->pc, yspan->y0, yspan->y1, yspan->ysi_a, yspan->ysi_b); */ \
 	}
 
@@ -775,22 +779,23 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 			struct yspan_list* ysl_b = &yspan_lists[ysli_b];
 
 			int ca=0, cb=0;
-			int crop_A_at=NIL, crop_B_at=NIL;
+			int crop_A_at=0, crop_B_at=0;
+			int do_crop_A=0, do_crop_B=0;
 			while (ca < ysl_a->n && cb < ysl_b->n) {
 				const int ysi_a = ysl_a->offset+ca;
 				const int ysi_b = ysl_b->offset+cb;
 
 				struct yspan ysa = yspan_stor[ysi_a];
-				if (crop_A_at >= 0) ysa.y0 = crop_A_at;
+				if (do_crop_A) ysa.y0 = crop_A_at;
 
 				struct yspan ysb = yspan_stor[ysi_b];
-				if (crop_B_at >= 0) ysb.y0 = crop_B_at;
+				if (do_crop_B) ysb.y0 = crop_B_at;
 
 				struct ospan {
 					enum { A, B, AB } input;
 					int y0, y1;
 				};
-				const int max_ospans = 3;
+				const int max_ospans = 2;
 				struct ospan ospans[max_ospans];
 				int n_ospans = 0;
 
@@ -801,6 +806,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					ospan->input = INPUT; \
 					ospan->y0 = Y0; \
 					ospan->y1 = Y1; \
+					assert(n_ospans < 2 || ospan->y0 > (ospan-1)->y1); \
 					assert(A <= ospan->input && ospan->input <= AB); \
 					assert(ospan->y1 >= ospan->y0); \
 				}
@@ -808,8 +814,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				const int a1 = ysa.y1;
 				const int b0 = ysb.y0;
 				const int b1 = ysb.y1;
-				crop_A_at=NIL;
-				crop_B_at=NIL;
+				do_crop_A = do_crop_B = 0;
 				if (ysa.y1 < ysb.y0) {
 					// AA|..
 					// ..|BB
@@ -826,6 +831,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					PUSH_OSPAN(A,  a0,   b0-1);
 					PUSH_OSPAN(AB, b0,   b1);
 					crop_A_at =    b1+1;
+					do_crop_A = 1;
 					cb++;
 				} else if (ysb.y0 < ysa.y0 && ysb.y1 > ysa.y1) {
 					// .AA|.
@@ -833,6 +839,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					PUSH_OSPAN(B,  b0,   a0-1);
 					PUSH_OSPAN(AB, a0,   a1);
 					crop_B_at =    a1+1;
+					do_crop_B = 1;
 					ca++;
 				} else if (ysa.y0 < ysb.y0 && ysa.y1 < ysb.y1) {
 					// AAA|.
@@ -840,6 +847,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					PUSH_OSPAN(A,  a0,   b0-1);
 					PUSH_OSPAN(AB, b0,   a1);
 					crop_B_at =    a1+1;
+					do_crop_B = 1;
 					ca++;
 				} else if (ysb.y0 < ysa.y0 && ysb.y1 < ysa.y1) {
 					// .AA|A
@@ -847,18 +855,21 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					PUSH_OSPAN(B,  b0,   a0-1);
 					PUSH_OSPAN(AB, a0,   b1);
 					crop_A_at =    b1+1;
+					do_crop_A = 1;
 					cb++;
 				} else if (ysa.y0 == ysb.y0 && ysa.y1 > ysb.y1) {
 					// AA|AA
 					// BB|..
 					PUSH_OSPAN(AB, b0,   b1);
 					crop_A_at =    b1+1;
+					do_crop_A = 1;
 					cb++;
 				} else if (ysa.y0 == ysb.y0 && ysb.y1 > ysa.y1) {
 					// AA|..
 					// BB|BB
 					PUSH_OSPAN(AB, a0,   a1);
 					crop_B_at =    a1+1;
+					do_crop_B = 1;
 					ca++;
 				} else if (ysa.y0 < ysb.y0 && ysa.y1 == ysb.y1) {
 					// AAAA|
@@ -885,18 +896,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				}
 
 				#undef PUSH_OSPAN
-
-				// check that ospans are properly ordered
-				for (int i = 1; i < n_ospans; i++) {
-					#if 0
-					printf("[%d;%d] vs [%d;%d]\n",
-						ospans[i-1].y0,
-						ospans[i-1].y1,
-						ospans[i].y0,
-						ospans[i].y1);
-					#endif
-					assert(ospans[i-1].y1 < ospans[i].y0);
-				}
 
 				// assert that we "agree" on overlaps
 				int expect_overlap =  0;
@@ -932,9 +931,9 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 			if (opcode == RZROP_UNION || opcode == RZROP_DIFFERENCE) while (ca < ysl_a->n) {
 				const int ysi_a = ysl_a->offset+ca;
 				struct yspan ysa = yspan_stor[ysi_a];
-				if (crop_A_at >= 0) {
+				if (do_crop_A) {
 					ysa.y0 = crop_A_at;
-					crop_A_at = NIL;
+					do_crop_A = 0;
 				}
 				PUSH_YSPAN(ysa.y0, ysa.y1, ysi_a, NIL);
 				ca++;
@@ -943,9 +942,9 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 			if (opcode == RZROP_UNION) while (cb < ysl_b->n) {
 				const int ysi_b = ysl_b->offset+cb;
 				struct yspan ysb = yspan_stor[ysi_b];
-				if (crop_B_at >= 0) {
+				if (do_crop_B) {
 					ysb.y0 = crop_B_at;
-					crop_B_at = NIL;
+					do_crop_B = 0;
 				}
 				PUSH_YSPAN(ysb.y0, ysb.y1, NIL, ysi_b);
 				cb++;
@@ -992,6 +991,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				const int ey1 = pv->y > v->y ? pv->y : v->y;
 				assert(ey1 > ey0);
 				if (!ispans_overlap(yspan->y0, yspan->y1, ey0, ey1-1)) continue; // edge not in current y-span
+				//printf("yspan [%d;%d] contains edge {%d,%d}-{%d,%d}\n", yspan->y0, yspan->y1, pv->x, pv->y, v->x, v->y);
 				assert(ey0 <= yspan->y0);
 				assert(ey1 >= yspan->y1);
 				struct poly_xedge* xedge = SCRATCH_TAIL_ALLOC(1);
@@ -1056,7 +1056,8 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				}
 			}
 			for (int i2 = 0; i2 < n_xedges; i2++) {
-				assert(xedges_begin[i2].side == (i2&1));
+				struct poly_xedge* xe = &xedges_begin[i2];
+				assert(xe->side == (i2&1));
 			}
 			yspan->xspan_count = n_xedges >> 1;
 			n_xspans += yspan->xspan_count;
@@ -1131,23 +1132,24 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		struct spanline* sub_scanlines = SCRATCH_ALLOCN(supsamp, struct spanline);
 		//memset(sub_scanlines, 0, sizeof(sub_scanlines[0])*supsamp);
 
-		int y_render_min=-1, y_render_max=-1;
+		const int width_subpix = rzr->width*supsamp;
 
+		int y_render_min=-1, y_render_max=-1;
 		const struct scratch SCRATCH_SNAPSHOT = scratch_save(SCRATCHP);
 		struct span* span_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct span);
 		uint8_t* ppix = NULL;
 		const int yy1 = rzr->height * supsamp - 1;
 		for (int i = 0; i < ysl->n; i++) {
-			const int root = ysl->offset+i;
-			struct yspan* yroot = &yspan_stor[root];
-			if (i > 0) assert(yroot->y0 > yspan_stor[ysl->offset+i-1].y1);
+			const int iroot = ysl->offset+i;
+			struct yspan* yroot = &yspan_stor[iroot];
+			if (i > 0) assert(yroot->y0 > yspan_stor[iroot-1].y1);
 			assert(yroot->pc == top);
 			if (yroot->y1 < 0 || yroot->y0 > yy1) continue;
 			const int root_y0 = yroot->y0 < 0 ? 0 : yroot->y0;
 			const int root_y1 = yroot->y1 > yy1 ? yy1 : yroot->y1;
 
 			int post_order_stack_height = 0;
-			int cursor = root;
+			int cursor = iroot;
 			int n_xop = 0;
 
 			// post-order tree traversal to create compact program
@@ -1282,13 +1284,23 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				#define NSPAN(N,SPAN0) \
 				{ \
 					const int _n = N; \
-					assert(SCRATCH_TAIL_REMAINING() >= _n); \
-					struct span* _spans = SCRATCH_TAIL_ALLOC(_n); \
-					memcpy(_spans, SPAN0, _n*SCRATCHP->tail_alloc_size); \
+					struct span* _p = SPAN0; \
+					for (int _i = 0; _i < _n; _i++) { \
+						struct span _s = *(_p++); \
+						if (_s.x < 0) { \
+							_s.w += _s.x; \
+							_s.x = 0; \
+						} \
+						if (_s.x+_s.w > width_subpix) _s.w = width_subpix-_s.x; \
+						if (_s.w <= 0) continue; \
+						struct span* _dst = SCRATCH_TAIL_ALLOC(1); \
+						*_dst = _s; \
+					} \
 				}
 
 				for (int xpc = 0; xpc < n_xop; xpc++) {
 					struct xop* xop = &xops[xpc];
+					xop->result_n_spans = -1;
 					xop->result_span_offset = SCRATCH_TAIL_OFFSET();
 					switch (xop->opcode) {
 
@@ -1324,7 +1336,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 						const int xspan_offset = ps->xspan_offset;
 						const int xspan_count = ps->xspan_count;
 
-						int n_spans = 0;
+						int offset0 = SCRATCH_TAIL_OFFSET();
 						for (int si = 0; si < xspan_count; si++) {
 							struct xspan_state* xs = &xspan_states_stor[xspan_offset+si];
 							while (xs->y <= y) {
@@ -1332,9 +1344,8 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 									.x = xs->edge_states[0].x,
 									.w = xs->edge_states[1].x - xs->edge_states[0].x,
 								};
-								if (span.w > 0) {
+								if (span.w > 0 && xs->y == y) {
 									NSPAN(1, &span);
-									n_spans++;
 								}
 								for (int ei = 0; ei < 2; ei++) {
 									struct xedge_state* es = &xs->edge_states[ei];
@@ -1347,7 +1358,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 								xs->y++;
 							}
 						}
-						xop->result_n_spans = n_spans;
+						xop->result_n_spans = SCRATCH_TAIL_OFFSET() - offset0;
 
 					}	break;
 
@@ -1369,6 +1380,16 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					}	break;
 
 					default: assert(!"unhandled case");
+					}
+					assert(xop->result_n_spans >= 0);
+					for (int i = 0; i < xop->result_n_spans; i++) {
+						struct span s = span_stor[xop->result_span_offset+i];
+						assert(s.x >= 0);
+						if (!(s.w > 0)) {
+							printf("uh oh opcode %d\n", xop->opcode);
+						}
+						assert(s.w > 0);
+						assert(s.x+s.w <= width_subpix);
 					}
 				}
 
@@ -2304,6 +2325,18 @@ int main(int argc, char** argv)
 			Difference();
 			end_tile();
 		}
+		#if 0
+		{
+			// TODO/FIXME
+			struct rzr* rzr = begin_tile(S/2, 16);
+			Save();
+			Scale(1.1);
+			Rotate(20.0);
+			Pattern(0.02, 0.03, 0.07, 0.1);
+			Restore();
+			end_tile();
+		}
+		#endif
 		end_tiles("_rzrdemo_zoo.png");
 	}
 
