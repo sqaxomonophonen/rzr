@@ -3,8 +3,9 @@
 /*
 TODO:
  - allow out-of-memory errors without crashing?
- - more convenienct shapes
 FIXME:
+ - broken demo cases: difference between rounded boxes is broken, pattern is
+   not working
  - A circle precalcs/stores a number of values equal to its subpixel radius
    regardless of image size.
 */
@@ -285,12 +286,45 @@ static inline void rzr_split(struct rzr* rzr)
 
 static inline void rzr_box(struct rzr* rzr, float width, float height)
 {
-	assert(!"TODO");
+	rzr_begin_poly(rzr);
+	rzr_vertex(rzr, -width, -height);
+	rzr_vertex(rzr,  width, -height);
+	rzr_vertex(rzr,  width,  height);
+	rzr_vertex(rzr, -width,  height);
+	rzr_end_poly(rzr);
 }
 
 static inline void rzr_rounded_box(struct rzr* rzr, float width, float height, float radius)
 {
-	assert(!"TODO");
+	if (radius <= 0.0f) {
+		rzr_box(rzr, width, height);
+		return;
+	}
+	rzr_box(rzr, width, height);
+	const float rh = radius*0.5f;
+	for (int pass = 0; pass < 2; pass++) {
+		const float d = (pass==0) ? rh : (pass==1) ? radius : 0.0f;
+		for (int corner = 0; corner < 4; corner++) {
+			rzr_tx_save(rzr);
+			switch (corner) {
+			case 0: rzr_tx_translate(rzr, -width+d, -height+d); break;
+			case 1: rzr_tx_translate(rzr,  width-d, -height+d); break;
+			case 2: rzr_tx_translate(rzr,  width-d,  height-d); break;
+			case 3: rzr_tx_translate(rzr, -width+d,  height-d); break;
+			default: assert(!"err");
+			}
+			if (pass == 0) {
+				rzr_box(rzr, rh, rh);
+				rzr_difference(rzr);
+			} else if (pass == 1) {
+				rzr_circle(rzr, radius);
+				rzr_union(rzr);
+			} else {
+				assert(!"unreachable");
+			}
+			rzr_tx_restore(rzr);
+		}
+	}
 }
 
 static inline void rzr_arc(struct rzr* rzr, float aperture_degrees, float radius, float width)
@@ -305,12 +339,25 @@ static inline void rzr_segment(struct rzr* rzr, float x0, float y0, float x1, fl
 
 static inline void rzr_isosceles_triangle(struct rzr* rzr, float w, float h)
 {
-	assert(!"TODO");
+	rzr_begin_poly(rzr);
+	rzr_vertex(rzr,  0, 0);
+	rzr_vertex(rzr,  w, h);
+	rzr_vertex(rzr, -w, h);
+	rzr_end_poly(rzr);
 }
 
 static inline void rzr_isosceles_trapezoid(struct rzr* rzr, float r1, float r2, float h)
 {
-	assert(!"TODO");
+	if (r1 <= 0.0f) {
+		rzr_isosceles_triangle(rzr, r2, h);
+		return;
+	}
+	rzr_begin_poly(rzr);
+	rzr_vertex(rzr, -r1, 0);
+	rzr_vertex(rzr,  r1, 0);
+	rzr_vertex(rzr,  r2, h);
+	rzr_vertex(rzr, -r2, h);
+	rzr_end_poly(rzr);
 }
 
 

@@ -2290,7 +2290,7 @@ int main(int argc, char** argv)
 
 	{
 		const int S = 128;
-		begin_tiles(S, S, 4, 1);
+		begin_tiles(S, S, 4, 2);
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
 			Star(40, 1.0f, 0.2f);
@@ -2325,6 +2325,49 @@ int main(int argc, char** argv)
 			Difference();
 			end_tile();
 		}
+		{
+			struct rzr* rzr = begin_tile(S/2, 16);
+			Circle(1.0);
+			Save();
+			Translate(-0.5,0);
+			Rotate(-33);
+			IsoscelesTriangle(0.2, 0.5);
+			Difference();
+			Restore();
+			Save();
+			Rotate(180);
+			IsoscelesTrapezoid(0.1,0.3,0.8);
+			Difference();
+			Restore();
+			Save();
+			Translate(0.5,0.2);
+			Rotate(22);
+			Box(0.3, 0.1);
+			Difference();
+			Restore();
+			end_tile();
+		}
+		{
+			struct rzr* rzr = begin_tile(S/2, 16);
+			Save();
+			Rotate(11);
+			RoundedBox(0.8,0.6,0.2);
+			Restore();
+			end_tile();
+		}
+		#if 0
+		{
+			// FIXME
+			struct rzr* rzr = begin_tile(S/2, 16);
+			Save();
+			Rotate(11);
+			RoundedBox(0.8,0.6,0.2);
+			RoundedBox(0.4,0.4,0.1);
+			Difference();
+			Restore();
+			end_tile();
+		}
+		#endif
 		#if 0
 		{
 			// TODO/FIXME
