@@ -5,8 +5,9 @@
    - Shapes (pushes 1): circles, polygons (concave), stars, ...
    - Boolean operations (pops 2, pushes 1): union, difference and intersection.
  - Transforms: translate, rotate, scale
+ - Point queries; determines if a point lies inside or outside of your shape (useful for GUI mouseover stuff).
  - Reasonably fast? Merges subpixel-scanline span lists into `memset()`'able pixel spans.
- - Doesn't `malloc()`; you provide the memory it uses. Depends on libm/`math.h`.
+ - Depends on libc/libm, but doesn't `malloc()`; you provide the memory it uses.
 
 ## Examples
 
