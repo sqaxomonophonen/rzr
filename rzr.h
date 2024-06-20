@@ -2,10 +2,11 @@
 
 /*
 TODO:
+ - MxN (borders/crosses rendered using point queries?)
  - allow out-of-memory errors without crashing?
 FIXME:
- - broken demo cases: difference between rounded boxes is broken, pattern is
-   not working
+ - difference between two rounded boxes is not working (booleans are probably
+   broken in general)
  - A circle precalcs/stores a number of values equal to its subpixel radius
    regardless of image size.
 */

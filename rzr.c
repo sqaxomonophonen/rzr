@@ -1462,11 +1462,81 @@ void rzr_render(struct rzr* rzr, size_t scratch_cap, void* scratch_stor, int str
 
 int rzr_subpixel_query(struct rzr* rzr, int subx, int suby)
 {
-	// XXX could this be the "base function" that the other functions below
-	// are based on? I'm thinking that MxN mode uses this to render
-	// borders/crosses? and that's point-by-point, so I don't think that
-	// making rzr_subpixel_queries() the "base function" is beneficial?
-	assert(!"TODO");
+	const int n_ops = rzr->prg_length;
+	const size_t stack_cap = 1<<16;
+	int stack_height = 0;
+	uint8_t stack[stack_cap];
+	#define PUSH(v) (assert(stack_height < stack_cap), stack[stack_height++]=(v))
+	#define POP()   (assert(stack_height > 0), stack[--stack_height])
+	for (int pc = 0; pc < n_ops; pc++) {
+		struct rzr_op* op = &rzr->prg[pc];
+		const int opcode = op->code;
+		switch (opcode) {
+		case RZROP_CIRCLE: {
+			const int64_t dx = subx - op->circle.cx;
+			const int64_t dy = suby - op->circle.cy;
+			const int64_t d2 = dx*dx + dy*dy;
+			const int64_t r = op->circle.radius;
+			const int v = d2 <= r*r;
+			PUSH(v);
+		}	break;
+		case RZROP_POLY: {
+			const int n = op->poly.n_vertices;
+			int iprev = n-1;
+			int acc = 0;
+			for (int i = 0; i < n; i++) {
+				struct rzr_op* voprev = &rzr->prg[pc+1+iprev];
+				iprev = i;
+				struct rzr_op* vop = &rzr->prg[pc+1+i];
+				assert(voprev->code == RZROP_VERTEX);
+				assert(vop->code == RZROP_VERTEX);
+				const int p0x = voprev->vertex.x;
+				const int p0y = voprev->vertex.y;
+				const int p1x = vop->vertex.x;
+				const int p1y = vop->vertex.y;
+				if (p0y == p1y) continue;
+				const int y0 = p0y < p1y ? p0y : p1y;
+				const int y1 = p0y > p1y ? p0y : p1y;
+				assert(y0 <= y1);
+				if (!(y0 <= suby && suby < y1)) continue;
+				if (p1y < p0y) {
+					// left edge; increment accumulator if
+					// point lies on or after edge
+					if (subx >= lineseg_eval_x_at_y(p1x, p1y, p0x, p0y, suby)) acc++;
+				} else if (p1y > p0y) {
+					// right edge; decrement accumulator if
+					// point lies after edge
+					if (subx > lineseg_eval_x_at_y(p0x, p0y, p1x, p1y, suby)) acc--;
+				} else {
+					assert(!"unreachable");
+				}
+			}
+			const int v = acc>0;
+			PUSH(v);
+			pc += n;
+		}	break;
+		case RZROP_UNION: {
+			const int b = POP();
+			const int a = POP();
+			PUSH(a || b);
+		}	break;
+		case RZROP_DIFFERENCE: {
+			const int b = POP();
+			const int a = POP();
+			PUSH(a && !b);
+		}	break;
+		case RZROP_INTERSECTION: {
+			const int b = POP();
+			const int a = POP();
+			PUSH(a && b);
+		}	break;
+		default: assert(!"unhandled case");
+		}
+	}
+	const int r = POP();
+	#undef POP
+	#undef PUSH
+	return r;
 }
 
 void rzr_subpixel_queries(struct rzr* rzr, int n, int* subpixel_coord_pairs, int* out_inside)
@@ -1923,6 +1993,61 @@ static struct rzr* getrz(float pixels_per_unit, int width, int height, int super
 	return &rzr;
 }
 
+static void test_point_queries(void)
+{
+	const int width = 512;
+	const int height = 512;
+	const int ss = 16;
+
+	{
+		struct rzr* rzr = getrz(width/2, width, height, ss);
+		Circle(0.5);
+		assert(rzr_query(rzr, width/2, height/2));
+		assert(rzr_query(rzr, width/2 + 50, height/2 - 50));
+		assert(!rzr_query(rzr, 0, 0));
+		assert(!rzr_query(rzr, width-1, height-1));
+		assert(!rzr_query(rzr, -100, -1000));
+		assert(!rzr_query(rzr, width+5000, -500));
+		assert(!rzr_query(rzr, width, 0));
+		assert(!rzr_query(rzr, 0, height));
+
+		assert(rzr_subpixel_query(rzr, (ss*width)/2, (ss*height)/2));
+		assert(rzr_subpixel_query(rzr, (ss*width)/2 + 50, (ss*height)/2 - 100));
+		assert(!rzr_subpixel_query(rzr, 0, 0));
+		assert(!rzr_subpixel_query(rzr, width*ss, height*ss));
+	}
+
+	{
+		struct rzr* rzr = getrz(width/2, width, height, ss);
+		BeginPoly();
+		Vertex(0, -1);
+		Vertex(1, 1);
+		Vertex(-1, 1);
+		EndPoly();
+		assert(!rzr_query(rzr, 0, 0));
+		assert(!rzr_query(rzr, width, 0));
+		assert(!rzr_query(rzr, 0, height/2));
+		assert(!rzr_query(rzr, width, height/2));
+		assert(rzr_query(rzr, width/2, height/2));
+	}
+
+	const int N = 10000;
+	for (int i = 0; i < N; i++) {
+		struct rzr* rzr = getrz(width/2, width, height, ss);
+		Save();
+		Rotate((float)(i*360) / (float)N);
+		Star(6 + (i%18), 0.8f, 0.5f);
+		Restore();
+		assert(!rzr_query(rzr, 0, 0));
+		assert(!rzr_query(rzr, width-1, 0));
+		assert(rzr_query(rzr, width/2, height/2));
+		assert(!rzr_query(rzr, width-1, height-1));
+		assert(!rzr_query(rzr, 0, height-1));
+		assert(!rzr_query(rzr, width-1, height-1));
+	}
+}
+
+
 static void test_subrender(void)
 {
 	#define RTEST(STR_L0,STR_L1,STR_L2,STR_EXPECTED_PIXELS) \
@@ -2046,6 +2171,7 @@ int main(int argc, char** argv)
 	test_binop_intersection();
 	test_binop_difference();
 	test_binop_generic();
+	test_point_queries();
 	test_subrender();
 	test_rzr();
 	printf("TESTS: OK\n");
