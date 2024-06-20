@@ -504,6 +504,7 @@ static int poly_xedge_compar(const void* va, const void* vb)
 
 static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_t* pixels)
 {
+	assert(!rzr->mxn_mode && "MxN not implemented");
 	#if 0
 	printf("sizeof(struct rzr_op) = %zd\n", sizeof(struct rzr_op)); // XXX
 	#endif
@@ -1458,6 +1459,43 @@ void rzr_render(struct rzr* rzr, size_t scratch_cap, void* scratch_stor, int str
 	render(rzr, &s, stride, pixels);
 	if (s.cursor_max > rzr->scratch_alloc_max) rzr->scratch_alloc_max = s.cursor_max;
 }
+
+int rzr_subpixel_query(struct rzr* rzr, int subx, int suby)
+{
+	// XXX could this be the "base function" that the other functions below
+	// are based on? I'm thinking that MxN mode uses this to render
+	// borders/crosses? and that's point-by-point, so I don't think that
+	// making rzr_subpixel_queries() the "base function" is beneficial?
+	assert(!"TODO");
+}
+
+void rzr_subpixel_queries(struct rzr* rzr, int n, int* subpixel_coord_pairs, int* out_inside)
+{
+	int* p = out_inside;
+	for (int i = 0; i < n; i++) {
+		const int subx = subpixel_coord_pairs[i<<1];
+		const int suby = subpixel_coord_pairs[(i<<1)+1];
+		const int is_inside = rzr_subpixel_query(rzr, subx, suby);
+		if (p != NULL) *(p++) = is_inside;
+	}
+}
+
+int rzr_query(struct rzr* rzr, int x, int y)
+{
+	return rzr_subpixel_query(rzr, x*rzr->supersampling_factor, y*rzr->supersampling_factor);
+}
+
+void rzr_queries(struct rzr* rzr, int n, int* coord_pairs, int* out_inside)
+{
+	int* p = out_inside;
+	for (int i = 0; i < n; i++) {
+		const int x = coord_pairs[i<<1];
+		const int y = coord_pairs[(i<<1)+1];
+		const int is_inside = rzr_query(rzr, x, y);
+		if (p != NULL) *(p++) = is_inside;
+	}
+}
+
 
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -56,6 +56,7 @@ struct rzr_op {
 	};
 };
 
+#define RZR_MXN_MAX_SIZES (10)
 struct rzr {
 	int width, height;
 	int supersampling_factor;
@@ -74,6 +75,12 @@ struct rzr {
 	int tx_stack_height_max;  // maximum seen value of rzr.tx_stack_height
 	int prg_length_max;       // maximum seen value of rzr.prg_length
 	size_t scratch_alloc_max; // maximum seen allocation cursor in scratch allocations (see rzr_render())
+
+	int mxn_mode;
+	int mxn_n_widths;
+	int mxn_widths[RZR_MXN_MAX_SIZES];
+	int mxn_n_heights;
+	int mxn_heights[RZR_MXN_MAX_SIZES];
 
 };
 
@@ -112,6 +119,70 @@ static inline void rzr_init(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx
 
 	rzr->width = width;
 	rzr->height = height;
+}
+
+// rzr_init_MxN() configures rzr to render a M x N grid. `widths` and `heights`
+// are arrays defining a "size matrix". Both arrays are 0-terminated, and
+// negative values means "stretch".  Stretch columns/rows are rendered 1 pixel
+// and 0 units wide/high.
+// Example: widths  = [10, -1, 20, 0] (or: [10, "stretch", 20, "end"])
+//          heights = [15, -1, 25, 0] (or: [15, "stretch", 25, "end"])
+//          pixels_per_units = 10
+//    +---+-+---+
+//    |a  |b|  c|
+//    |   | |   |
+//    |   | |   |
+//    +---+-+---+
+//    |d  |e|  f|
+//    +---+-+---+
+//    |   | |   |
+//    |   | |   |
+//    |g  |h|  i|
+//    +---+-+---+
+//     pixel pos    pixel dim     units pos    units dim
+// a     0 , 0       10 x 15    -1.5 , -2.0    1.0 x 1.5
+// b    10 , 0        1 x 15     0.0 , -2.0      0 x 1.5
+// c    11 , 0       20 x 15     0.0 , -2.0    2.0 x 1.5
+// d     0 , 15      10 x 1     -1.5 ,  0.0    1.0 x 0
+// e    10 , 15       1 x 1      0.0 ,  0.0      0 x 0
+// f    11 , 15      20 x 1      0.0 ,  0.0    2.0 x 0
+// g     0 , 16      10 x 25    -1.5 ,  0.0    1.0 x 2.5
+// h    10 , 16       1 x 25     0.0 ,  0.0      0 x 2.5
+// i    11 , 16      20 x 25     0.0 ,  0.0    2.0 x 2.5
+// Total pixel width   = 10+1+20 = 31     unit width  = 1.0+2.0 = 3.0
+// Total pixel heights = 15+1+25 = 41     unit height = 1.5+2.5 = 4.0
+static inline void rzr_init_MxN(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx_stack, int prg_cap, struct rzr_op* prg, int* widths, int* heights, float pixels_per_unit, int supersampling_factor)
+{
+	int total_width=0, total_height=0;
+	for (int axis = 0; axis < 2; axis++) {
+		int* sizes = (axis==0) ? widths : (axis==1) ? heights : NULL;
+		int n = 0;
+		int acc = 0;
+		for (const int* p = sizes; *p != 0; n++, p++) {
+			const int size = *p;
+			assert(size != 0);
+			if (size < 0) continue;
+			acc += size;
+		}
+		assert(n <= RZR_MXN_MAX_SIZES);
+		if (axis == 0) { total_width=acc; } else if (axis==1) { total_height=acc; } else { assert(!"unreachable"); }
+	}
+	rzr_init(rzr, tx_stack_cap, tx_stack, prg_cap, prg, total_width, total_height, pixels_per_unit, supersampling_factor);
+	rzr->mxn_mode = 1;
+	for (int axis = 0; axis < 2; axis++) {
+		int* sizes = (axis==0) ? widths : (axis==1) ? heights : NULL;
+		int* wp    = (axis==0) ? rzr->mxn_widths : (axis==1) ? rzr->mxn_heights : NULL;
+		const int* p = sizes;
+		while (*p != 0) *(wp++) = *(p++);
+		const int n = p-sizes;
+		if (axis == 0) {
+			rzr->mxn_n_widths = n;
+		} else if (axis == 1) {
+			rzr->mxn_n_heights = n;
+		} else {
+			assert(!"unreachable");
+		}
+	}
 }
 
 static inline struct rzr_tx* rzr_get_current_tx(struct rzr* rzr)
@@ -300,30 +371,32 @@ static inline void rzr_rounded_box(struct rzr* rzr, float width, float height, f
 		rzr_box(rzr, width, height);
 		return;
 	}
-	rzr_box(rzr, width, height);
-	const float rh = radius*0.5f;
-	for (int pass = 0; pass < 2; pass++) {
-		const float d = (pass==0) ? rh : (pass==1) ? radius : 0.0f;
-		for (int corner = 0; corner < 4; corner++) {
-			rzr_tx_save(rzr);
-			switch (corner) {
-			case 0: rzr_tx_translate(rzr, -width+d, -height+d); break;
-			case 1: rzr_tx_translate(rzr,  width-d, -height+d); break;
-			case 2: rzr_tx_translate(rzr,  width-d,  height-d); break;
-			case 3: rzr_tx_translate(rzr, -width+d,  height-d); break;
-			default: assert(!"err");
-			}
-			if (pass == 0) {
-				rzr_box(rzr, rh, rh);
-				rzr_difference(rzr);
-			} else if (pass == 1) {
-				rzr_circle(rzr, radius);
-				rzr_union(rzr);
-			} else {
-				assert(!"unreachable");
-			}
-			rzr_tx_restore(rzr);
+
+	// FIXME: handle width < radius*2 and height < radius*2
+
+	rzr_begin_poly(rzr);
+	rzr_vertex(rzr , -width        , -height+radius );
+	rzr_vertex(rzr , -width+radius , -height        );
+	rzr_vertex(rzr ,  width-radius , -height        );
+	rzr_vertex(rzr ,  width        , -height+radius );
+	rzr_vertex(rzr ,  width        ,  height-radius );
+	rzr_vertex(rzr ,  width-radius ,  height        );
+	rzr_vertex(rzr , -width+radius ,  height        );
+	rzr_vertex(rzr , -width        ,  height-radius );
+	rzr_end_poly(rzr);
+
+	for (int corner = 0; corner < 4; corner++) {
+		rzr_tx_save(rzr);
+		switch (corner) {
+		case 0: rzr_tx_translate(rzr, -width+radius, -height+radius); break;
+		case 1: rzr_tx_translate(rzr,  width-radius, -height+radius); break;
+		case 2: rzr_tx_translate(rzr,  width-radius,  height-radius); break;
+		case 3: rzr_tx_translate(rzr, -width+radius,  height-radius); break;
+		default: assert(!"unreachable");
 		}
+		rzr_circle(rzr, radius);
+		rzr_union(rzr);
+		rzr_tx_restore(rzr);
 	}
 }
 
@@ -360,8 +433,12 @@ static inline void rzr_isosceles_trapezoid(struct rzr* rzr, float r1, float r2, 
 	rzr_end_poly(rzr);
 }
 
+void rzr_render(struct rzr*, size_t scratch_cap, void* scratch_stor, int stride, uint8_t* pixels);
 
-void rzr_render(struct rzr*, size_t scratch_cap, void* scratch, int stride, uint8_t* pixels);
+void rzr_subpixel_queries(struct rzr*, int n, int* subpixel_coord_pairs, int* out_inside);
+int  rzr_subpixel_query(struct rzr*, int subx, int suby);
+void rzr_queries(struct rzr*, int n, int* coord_pairs, int* out_inside);
+int  rzr_query(struct rzr*, int x, int y);
 
 #ifndef RZR_NO_SHORT_NAMES
 
