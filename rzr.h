@@ -5,8 +5,6 @@ TODO:
  - MxN (borders/crosses rendered using point queries?)
  - allow out-of-memory errors without crashing?
 FIXME:
- - difference between two rounded boxes is not working (booleans are probably
-   broken in general)
  - A circle precalcs/stores a number of values equal to its subpixel radius
    regardless of image size.
 */
@@ -35,14 +33,14 @@ enum rzr_op_code {
 	//RZROP_ZERO,
 	//RZROP_ONE,
 
-	RZROP_POLY,
+	RZROP_POLY, // 3
 	RZROP_VERTEX,
 
-	RZROP_CIRCLE,
+	RZROP_CIRCLE, // 5
 
-	RZROP_UNION,
+	RZROP_UNION, // 6
 	RZROP_INTERSECTION,
-	RZROP_DIFFERENCE,
+	RZROP_DIFFERENCE, // 8
 
 	RZROP_END,
 };

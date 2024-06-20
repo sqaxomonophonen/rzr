@@ -1108,8 +1108,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 		struct xop {
 			int opcode;
-			int result_span_offset;
-			int result_n_spans;
 			union {
 				struct {
 					int cx,cy,radius;
@@ -1266,8 +1264,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 					if (xop != NULL) {
 						xop->opcode = op->code;
-						xop->result_span_offset = -1;
-						xop->result_n_spans = -1;
 					}
 
 					cursor = -1;
@@ -1281,6 +1277,11 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				assert(0 <= yy && yy < rzr->height);
 				if (y_render_min == -1 || yy < y_render_min) y_render_min = yy;
 				if (y_render_max == -1 || yy > y_render_max) y_render_max = yy;
+
+				struct rlist { int offset,count; };
+				const int rstack_cap = 1<<13;
+				int rstack_height = 0;
+				struct rlist rstack[rstack_cap];
 
 				#define NSPAN(N,SPAN0) \
 				{ \
@@ -1301,8 +1302,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 				for (int xpc = 0; xpc < n_xop; xpc++) {
 					struct xop* xop = &xops[xpc];
-					xop->result_n_spans = -1;
-					xop->result_span_offset = SCRATCH_TAIL_OFFSET();
+					const int offset0 = SCRATCH_TAIL_OFFSET();
 					switch (xop->opcode) {
 
 					case RZROP_CIRCLE: {
@@ -1319,7 +1319,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 							.x = cx-dx+1,
 							.w = dx+dx-1,
 						};
-						xop->result_n_spans = 1;
 						NSPAN(1, &span);
 					}	break;
 
@@ -1337,7 +1336,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 						const int xspan_offset = ps->xspan_offset;
 						const int xspan_count = ps->xspan_count;
 
-						int offset0 = SCRATCH_TAIL_OFFSET();
 						for (int si = 0; si < xspan_count; si++) {
 							struct xspan_state* xs = &xspan_states_stor[xspan_offset+si];
 							while (xs->y <= y) {
@@ -1359,54 +1357,44 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 								xs->y++;
 							}
 						}
-						xop->result_n_spans = SCRATCH_TAIL_OFFSET() - offset0;
 
 					}	break;
 
 					case RZROP_UNION:
 					case RZROP_DIFFERENCE:
 					case RZROP_INTERSECTION: {
-						const int ia = xpc-2;
-						const int ib = xpc-1;
-						assert(ia >= 0);
-						assert(ib >= 0);
-						struct xop* xa = &xops[ia];
-						struct xop* xb = &xops[ib];
-						const int na = xa->result_n_spans;
-						const int nb = xb->result_n_spans;
-						struct span* aa = span_stor + xa->result_span_offset;
-						struct span* bb = span_stor + xb->result_span_offset;
-						xop->result_n_spans = spanlist_binop(xop->opcode, SCRATCH_AT(), SCRATCH_TAIL_REMAINING(), na, aa, nb, bb);
-						SCRATCH_TAIL_YANK(xop->result_n_spans);
+						assert(rstack_height >= 2);
+						struct rlist rb = rstack[--rstack_height];
+						struct rlist ra = rstack[--rstack_height];
+						struct span* aa = span_stor + ra.offset;
+						struct span* bb = span_stor + rb.offset;
+						const int nr = spanlist_binop(xop->opcode, SCRATCH_AT(), SCRATCH_TAIL_REMAINING(), ra.count, aa, rb.count, bb);
+						SCRATCH_TAIL_YANK(nr);
 					}	break;
 
 					default: assert(!"unhandled case");
 					}
-					assert(xop->result_n_spans >= 0);
-					for (int i = 0; i < xop->result_n_spans; i++) {
-						struct span s = span_stor[xop->result_span_offset+i];
+
+					const int nspans = SCRATCH_TAIL_OFFSET() - offset0;
+					for (int i = 0; i < nspans; i++) {
+						struct span s = span_stor[offset0+i];
 						assert(s.x >= 0);
-						if (!(s.w > 0)) {
-							printf("uh oh opcode %d\n", xop->opcode);
-						}
 						assert(s.w > 0);
 						assert(s.x+s.w <= width_subpix);
 					}
+					assert(rstack_height < rstack_cap);
+					struct rlist* rl = &rstack[rstack_height++];
+					rl->offset = offset0;
+					rl->count = nspans;
 				}
 
-				struct xop* rx = &xops[n_xop-1];
-				#if 0
-				printf("n spans: %d\n", rx->result_n_spans);
-				for (int i = 0; i < rx->result_n_spans; i++) {
-					struct span* span = span_stor + rx->result_span_offset + i;
-					printf("   [%d,%d]\n", span->x, span->x+span->w);
-				}
-				#endif
+				assert(rstack_height > 0);
+				struct rlist rx = rstack[--rstack_height];
 
 				assert(0 <= sub_scanline_i && sub_scanline_i < supsamp);
 				struct spanline* ssc = &sub_scanlines[sub_scanline_i];
-				ssc->spans = span_stor + rx->result_span_offset;
-				ssc->n = rx->result_n_spans;
+				ssc->spans = span_stor + rx.offset;
+				ssc->n = rx.count;
 
 				//printf("render y=%d / %d str=%d\n", y, y/supsamp, stride);
 				ppix = pixels + yy * stride;
@@ -2228,6 +2216,8 @@ static struct {
 	#error "TEST_MEMERROR or TEST_PERFORMANCE must be defined"
 	#endif
 
+	double t0;
+
 	// anim
 	int anim_n_frames, anim_n_frames_remaining;
 	int anim_width, anim_height;
@@ -2235,7 +2225,6 @@ static struct {
 	int anim_supersampling_factor;
 	uint8_t* anim_data;
 	uint8_t* anim_p;
-	double anim_t0;
 
 	// tile
 	int tile_width, tile_height, tile_stride;
@@ -2292,6 +2281,7 @@ static void begin_tiles(int width, int height, int n_columns, int n_rows)
 	g.tile_n_rows = n_rows;
 	g.tile_cursor = 0;
 	g.tile_bitmap = calloc(width*n_columns*height*n_rows, 1);
+	g.t0 = tim();
 }
 
 static struct rzr* begin_tile(float pixels_per_unit, int supersampling_factor)
@@ -2316,10 +2306,12 @@ static void end_tile(void)
 
 static void end_tiles(const char* path)
 {
+	const double dt = tim() - g.t0;
 	if (path != NULL) {
 		assert(stbi_write_png(path, g.tile_stride, g.tile_height*g.tile_n_rows, 1, g.tile_bitmap, g.tile_stride));
-		printf("Wrote %s\n", path);
+		printf("Wrote %s; ", path);
 	}
+	printf("render took %.5fs\n", dt);
 	free(g.tile_bitmap);
 }
 
@@ -2357,7 +2349,7 @@ static void begin_anim(int n_frames, int width, int height, float pixels_per_uni
 	g.anim_supersampling_factor =  supersampling_factor;
 	g.anim_data = malloc(n_frames*width*height);
 	g.anim_p = g.anim_data;
-	g.anim_t0 = tim();
+	g.t0 = tim();
 }
 
 static struct rzr* begin_frame(void)
@@ -2390,7 +2382,7 @@ static void end_frame(void)
 static void end_anim(const char* path)
 {
 	assert(g.anim_n_frames_remaining == 0);
-	const double dt = tim() - g.anim_t0;
+	const double dt = tim() - g.t0;
 
 	uint8_t* rgba = malloc(4*g.anim_width*g.anim_height);
 	MsfGifState gs = {};
@@ -2426,6 +2418,7 @@ static void end_anim(const char* path)
 
 int main(int argc, char** argv)
 {
+	#if 1
 	{
 		const int S = 512;
 		struct rzr* rzr = begin_render(S, S, S/2, 16);
@@ -2451,7 +2444,9 @@ int main(int argc, char** argv)
 		}
 		end_render("_rzrdemo_sharp.png");
 	}
+	#endif
 
+	#if 1
 	{
 		const int S = 128;
 		begin_tiles(S, S, 4, 2);
@@ -2493,14 +2488,14 @@ int main(int argc, char** argv)
 			struct rzr* rzr = begin_tile(S/2, 16);
 			Circle(1.0);
 			Save();
-			Translate(-0.5,0);
-			Rotate(-33);
+			Translate(-0.1,0.2);
+			Rotate(33);
 			IsoscelesTriangle(0.2, 0.5);
 			Difference();
 			Restore();
 			Save();
-			Rotate(180);
-			IsoscelesTrapezoid(0.1,0.3,0.8);
+			Rotate(160);
+			IsoscelesTrapezoid(0.1,0.4,0.8);
 			Difference();
 			Restore();
 			Save();
@@ -2515,23 +2510,18 @@ int main(int argc, char** argv)
 			struct rzr* rzr = begin_tile(S/2, 16);
 			Save();
 			Rotate(11);
-			RoundedBox(0.8,0.6,0.2);
-			Restore();
-			end_tile();
-		}
-		#if 0
-		{
-			// FIXME
-			struct rzr* rzr = begin_tile(S/2, 16);
-			Save();
-			Rotate(11);
-			RoundedBox(0.8,0.6,0.2);
-			RoundedBox(0.4,0.4,0.1);
+			RoundedBox(0.8,0.6,0.3);
+			Rotate(-11);
+			RoundedBox(0.4,0.4,0.15);
+			Difference();
+			const float d = 0.03f;
+			RoundedBox(0.4-d,0.4-d,0.15-d);
+			Union();
+			RoundedBox(0.4-2*d,0.4-2*d,0.15-2*d);
 			Difference();
 			Restore();
 			end_tile();
 		}
-		#endif
 		#if 0
 		{
 			// TODO/FIXME
@@ -2546,7 +2536,9 @@ int main(int argc, char** argv)
 		#endif
 		end_tiles("_rzrdemo_zoo.png");
 	}
+	#endif
 
+	#if 1
 	{
 		const int NFRAM = 200;
 		const int S = 128;
@@ -2594,6 +2586,7 @@ int main(int argc, char** argv)
 		}
 		end_anim("_rzrdemo_trirot.gif");
 	}
+	#endif
 
 	return EXIT_SUCCESS;
 }
