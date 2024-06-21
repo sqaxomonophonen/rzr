@@ -2,8 +2,8 @@
  - Small codebase (<4ksloc), easy to drop-in: just copy `rzr.c` and `rzr.h` into your project.
  - Monochrome-only, 8-bit grayscale output
  - Stack-based drawing:
-   - Shapes (pushes 1): circles, polygons (concave), stars, ...
-   - Boolean operations (pops 2, pushes 1): union, difference and intersection.
+   - Shapes (pushes 1): circles, polygons (concave) (+helpers).
+   - Boolean operations (pops 2, pushes 1): union, difference, intersection.
  - Transforms: translate, rotate, scale
  - Point queries" determines if a point lies inside or outside of your shape (useful for GUI mouseover stuff).
  - "MxN rendering": useful for stretched renders, like UI frames, buttons, etc.
