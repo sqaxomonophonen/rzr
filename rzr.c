@@ -2721,18 +2721,28 @@ int main(int argc, char** argv)
 			Restore();
 			end_tile();
 		}
-		#if 0
-		{
-			// TODO/FIXME
+
+		for (int t = 0; t < 2; t++) {
 			struct rzr* rzr = begin_tile(S/2, 16);
 			Save();
-			//Scale(1.1);
-			Rotate(10.0);
-			Pattern(0.02, 0.03, 0.07, 0.1);
+			Rotate(22);
+			if (t == 0) Split();
+			if (t == 1) Line(0.1);
 			Restore();
+			Circle(0.6);
+			Difference();
+
+			Save();
+			Rotate(80);
+			if (t == 0) Split();
+			if (t == 1) Line(0.1);
+			Circle(0.5);
+			Restore();
+			Intersection();
+			Union();
 			end_tile();
 		}
-		#endif
+
 		end_tiles("_rzrdemo_zoo.png");
 	}
 	#endif

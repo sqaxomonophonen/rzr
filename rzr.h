@@ -29,9 +29,7 @@ enum rzr_op_code {
 	RZROP_SWAP,
 	RZROP_DROP,
 
-	// these might be useful?
-	//RZROP_ZERO,
-	//RZROP_ONE,
+	RZROP_ZERO,
 
 	RZROP_POLY, // 3
 	RZROP_VERTEX,
@@ -305,6 +303,11 @@ static inline void rzr_union(struct rzr* rzr)        { rzr_op(rzr, RZROP_UNION);
 static inline void rzr_intersection(struct rzr* rzr) { rzr_op(rzr, RZROP_INTERSECTION); }
 static inline void rzr_difference(struct rzr* rzr)   { rzr_op(rzr, RZROP_DIFFERENCE); }
 
+static inline void rzr_zero(struct rzr* rzr)
+{
+	rzr_op(rzr, RZROP_ZERO);
+}
+
 static inline void rzr_circle(struct rzr* rzr, float radius)
 {
 	struct rzr_op* op = rzr_op(rzr, RZROP_CIRCLE);
@@ -363,15 +366,95 @@ static inline void rzr_star(struct rzr* rzr, int n, float outer_radius, float in
 	rzr_end_poly(rzr);
 }
 
+
+#if 0
+static inline float pat1(float x) { return x - floorf(x); }
+static inline float patw(float x, float w, float wi) { return pat1(x*wi)*w; }
+#endif
+
+struct rzr__xlines {
+	struct rzr* rzr;
+	float  corner_coords[8];
+	float  xmin, xmax;
+};
+
+static void rzr__xlines_init(struct rzr__xlines* rl, struct rzr* rzr)
+{
+	memset(rl, 0, sizeof *rl);
+	rl->rzr = rzr;
+	struct rzr_tx tx = *rzr_get_current_tx(rzr);
+	struct rzr_tx invtx = tx;
+	rzr_invert_tx(&invtx);
+	const int ss = rzr_get_supersampling_factor(rzr);
+	const float w = rzr->virtual_width*ss;
+	const float h = rzr->virtual_height*ss;
+	float* cc = rl->corner_coords;
+	rzr_map_point(&invtx, 0, 0, &cc[0], &cc[1]); cc+=2;
+	rzr_map_point(&invtx, w, 0, &cc[0], &cc[1]); cc+=2;
+	rzr_map_point(&invtx, w, h, &cc[0], &cc[1]); cc+=2;
+	rzr_map_point(&invtx, 0, h, &cc[0], &cc[1]); cc+=2;
+	for (int i = 0; i < 8; i += 2) {
+		const float x = rl->corner_coords[i];
+		if (i == 0 || x < rl->xmin) rl->xmin = x;
+		if (i == 0 || x > rl->xmax) rl->xmax = x;
+	}
+}
+
+static int rzr__xline(struct rzr__xlines* rl, float x0, float x1)
+{
+	assert(x0 < x1);
+	if (rl->xmax < x0 || rl->xmin > x1) return 0;
+	int cprev = 3;
+	const float* cc = rl->corner_coords;
+	struct rzr* rzr = rl->rzr;
+	rzr_begin_poly(rzr);
+	for (int c = 0; c < 4; c++) {
+		const float cx = cc[(c<<1)];
+		const float cy = cc[(c<<1)+1];
+		const float prevcx = cc[(cprev<<1)];
+		const float prevcy = cc[(cprev<<1)+1];
+		cprev = c;
+		const float cxmin = cx < prevcx ? cx : prevcx;
+		const float cxmax = cx > prevcx ? cx : prevcx;
+		//const int inside = x0 <= cx && cx <= x1;
+		const int previnside = x0 <= prevcx && prevcx <= x1;
+		if (previnside) {
+			rzr_vertex(rzr, prevcx, prevcy);
+		}
+		const int x0vis = cxmin <= x0 && x0 <= cxmax;
+		const int x1vis = cxmin <= x1 && x1 <= cxmax;
+		if (!x0vis && !x1vis) continue;
+		const float y0 = !x0vis ? 0.0f : prevcy + ((x0-prevcx)/(cx-prevcx)) * (cy-prevcy);
+		const float y1 = !x0vis ? 0.0f : prevcy + ((x1-prevcx)/(cx-prevcx)) * (cy-prevcy);
+		if (x0vis && x1vis) {
+			if (cx > prevcx) {
+				if (!previnside) rzr_vertex(rzr, x0, y0);
+				rzr_vertex(rzr, x1, y1);
+			} else {
+				if (!previnside) rzr_vertex(rzr, x1, y1);
+				rzr_vertex(rzr, x0, y0);
+			}
+		} else if (x0vis && !x1vis) {
+			rzr_vertex(rzr, x0, y0);
+		} else if (x1vis && !x0vis) {
+			rzr_vertex(rzr, x1, y1);
+		} else {
+			assert(!"unreachable");
+		}
+	}
+	rzr_end_poly(rzr);
+	return 1;
+}
+
 static inline void rzr_pattern(struct rzr* rzr, float* ws)
 {
 	int n=0;
-	float ww = 0.0f;
+	float totw = 0.0f;
 	float* p = ws;
-	while (*p > 0) { ww+=*p ; p++; n++; }
+	while (*p > 0) { totw+=*p ; p++; n++; }
 	assert(((n&1) == 0) && "ws count must be even");
 	assert((n >= 2) && "empty pattern");
-	assert(ww > 0.0f);
+	assert(totw > 0.0f);
 
 	struct rzr_tx tx = *rzr_get_current_tx(rzr);
 	struct rzr_tx invtx = tx;
@@ -381,8 +464,10 @@ static inline void rzr_pattern(struct rzr* rzr, float* ws)
 	rzr_map_point(&invtx, 0, 0, &x0, &y0);
 	rzr_map_point(&invtx, rzr->virtual_width*ss,  0, &xu, &yu);
 	rzr_map_point(&invtx, 0, rzr->virtual_height*ss, &xv, &yv);
-	//printf("n=%f,%f u=%f,%f v=%f,%f\n", x0, y0, xu,yu, xv,yv);
+
+	printf("n=%f,%f u=%f,%f v=%f,%f\n", x0, y0, xu,yu, xv,yv);
 	assert(!"TODO pattern");
+
 	#if 0
 	float x = 0.0f;
 	p = ws;
@@ -405,14 +490,26 @@ static inline void rzr_pattern(struct rzr* rzr, float* ws)
 	#endif
 }
 
+
 static inline void rzr_line(struct rzr* rzr, float width)
 {
-	assert(!"TODO");
+	struct rzr__xlines rl;
+	rzr__xlines_init(&rl, rzr);
+	const float wh = 0.5f*width;
+	if (!rzr__xline(&rl, -wh, wh)) {
+		assert(!"TODO ZERO OP");
+		rzr_zero(rzr);
+	}
 }
 
 static inline void rzr_split(struct rzr* rzr)
 {
-	assert(!"TODO");
+	struct rzr__xlines rl;
+	rzr__xlines_init(&rl, rzr);
+	if (rl.xmax <= 0.0f || !rzr__xline(&rl, 0.0f, rl.xmax)) {
+		assert(!"TODO ZERO OP");
+		rzr_zero(rzr);
+	}
 }
 
 static inline void rzr_box(struct rzr* rzr, float width, float height)
