@@ -2,8 +2,8 @@
 
 /*
 TODO:
- - MxN (borders/crosses rendered using point queries?)
  - allow out-of-memory errors without crashing?
+ - implement pick/swap/drop
 FIXME:
  - A circle precalcs/stores a number of values equal to its subpixel radius
    regardless of image size.
