@@ -57,7 +57,8 @@ struct rzr_op {
 
 #define RZR_MXN_MAX_SIZES (10)
 struct rzr {
-	int width, height;
+	int bitmap_width,  bitmap_height;
+	int virtual_width, virtual_height;
 	int supersampling_factor;
 
 	int tx_stack_cap;
@@ -75,11 +76,10 @@ struct rzr {
 	int prg_length_max;       // maximum seen value of rzr.prg_length
 	size_t scratch_alloc_max; // maximum seen allocation cursor in scratch allocations (see rzr_render())
 
-	int mxn_mode;
-	int mxn_n_widths;
-	int mxn_widths[RZR_MXN_MAX_SIZES];
-	int mxn_n_heights;
-	int mxn_heights[RZR_MXN_MAX_SIZES];
+	int n_widths;
+	int widths[RZR_MXN_MAX_SIZES];
+	int n_heights;
+	int heights[RZR_MXN_MAX_SIZES];
 
 };
 
@@ -96,7 +96,7 @@ static inline int rzr_get_supersampling_factor(struct rzr* rzr)
 		: rzr->supersampling_factor;
 }
 
-static inline void rzr_init(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx_stack, int prg_cap, struct rzr_op* prg, int width, int height, float pixels_per_unit, int supersampling_factor)
+static inline void rzr__init_common(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx_stack, int prg_cap, struct rzr_op* prg, float pixels_per_unit, int supersampling_factor, int virtual_width, int virtual_height, int bitmap_width, int bitmap_height)
 {
 	memset(rzr, 0, sizeof *rzr);
 	rzr->tx_stack_cap = tx_stack_cap;
@@ -113,11 +113,23 @@ static inline void rzr_init(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx
 	struct rzr_tx* tx0 = &rzr->tx_stack[rzr->tx_stack_height-1];
 	tx0->basis0_x = subpixels_per_unit;
 	tx0->basis0_y = 0.0f;
-	tx0->origin_x = (float)(width*ssf)  * 0.5f;
-	tx0->origin_y = (float)(height*ssf) * 0.5f;
+	tx0->origin_x = (float)(virtual_width*ssf)  * 0.5f;
+	tx0->origin_y = (float)(virtual_height*ssf) * 0.5f;
 
-	rzr->width = width;
-	rzr->height = height;
+	rzr->bitmap_width = bitmap_width;
+	rzr->bitmap_height = bitmap_height;
+	rzr->virtual_width = virtual_width;
+	rzr->virtual_height = virtual_height;
+
+	rzr->n_widths = 1;
+	rzr->n_heights = 1;
+	rzr->widths[0]  = virtual_width;;
+	rzr->heights[0] = virtual_height;
+}
+
+static inline void rzr_init(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx_stack, int prg_cap, struct rzr_op* prg, int width, int height, float pixels_per_unit, int supersampling_factor)
+{
+	rzr__init_common(rzr, tx_stack_cap, tx_stack, prg_cap, prg, pixels_per_unit, supersampling_factor, width, height, width, height);
 }
 
 // rzr_init_MxN() configures rzr to render a M x N grid. `widths` and `heights`
@@ -150,34 +162,50 @@ static inline void rzr_init(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx
 // i    11 , 16      20 x 25     0.0 ,  0.0    2.0 x 2.5
 // Total pixel width   = 10+1+20 = 31     unit width  = 1.0+2.0 = 3.0
 // Total pixel heights = 15+1+25 = 41     unit height = 1.5+2.5 = 4.0
-static inline void rzr_init_MxN(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx_stack, int prg_cap, struct rzr_op* prg, int* widths, int* heights, float pixels_per_unit, int supersampling_factor)
+static inline void rzr_init_MxN(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx_stack, int prg_cap, struct rzr_op* prg, const int* widths, const int* heights, float pixels_per_unit, int supersampling_factor)
 {
-	int total_width=0, total_height=0;
+	int virtual_width=0, virtual_height=0;
+	int bitmap_width=0, bitmap_height=0;
 	for (int axis = 0; axis < 2; axis++) {
-		int* sizes = (axis==0) ? widths : (axis==1) ? heights : NULL;
-		int n = 0;
-		int acc = 0;
+		const int* sizes = (axis==0) ? widths : (axis==1) ? heights : NULL;
+		int n=0;
+		int bitmap_size=0, virtual_size=0;
+		int n_consec_stretch = 0;
 		for (const int* p = sizes; *p != 0; n++, p++) {
 			const int size = *p;
 			assert(size != 0);
-			if (size < 0) continue;
-			acc += size;
+			if (size < 0) {
+				n_consec_stretch++;
+				assert((n_consec_stretch < 2) && "consecutive ''stretch'' sizes are non-sensical and not supported");
+				bitmap_size += 1;
+			} else {
+				n_consec_stretch = 0;
+				bitmap_size += size;
+				virtual_size += size;
+			}
 		}
-		assert(n <= RZR_MXN_MAX_SIZES);
-		if (axis == 0) { total_width=acc; } else if (axis==1) { total_height=acc; } else { assert(!"unreachable"); }
+		assert(0 < n && n <= RZR_MXN_MAX_SIZES);
+		if (axis == 0) {
+			bitmap_width=bitmap_size;
+			virtual_width=virtual_size;
+		} else if (axis==1) {
+			bitmap_height=bitmap_size;
+			virtual_height=virtual_size;
+		} else {
+			assert(!"unreachable");
+		}
 	}
-	rzr_init(rzr, tx_stack_cap, tx_stack, prg_cap, prg, total_width, total_height, pixels_per_unit, supersampling_factor);
-	rzr->mxn_mode = 1;
+	rzr__init_common(rzr, tx_stack_cap, tx_stack, prg_cap, prg, pixels_per_unit, supersampling_factor, virtual_width, virtual_height, bitmap_width, bitmap_height);
 	for (int axis = 0; axis < 2; axis++) {
-		int* sizes = (axis==0) ? widths : (axis==1) ? heights : NULL;
-		int* wp    = (axis==0) ? rzr->mxn_widths : (axis==1) ? rzr->mxn_heights : NULL;
+		const int* sizes = (axis==0) ? widths : (axis==1) ? heights : NULL;
+		int* wp    = (axis==0) ? rzr->widths : (axis==1) ? rzr->heights : NULL;
 		const int* p = sizes;
 		while (*p != 0) *(wp++) = *(p++);
 		const int n = p-sizes;
 		if (axis == 0) {
-			rzr->mxn_n_widths = n;
+			rzr->n_widths = n;
 		} else if (axis == 1) {
-			rzr->mxn_n_heights = n;
+			rzr->n_heights = n;
 		} else {
 			assert(!"unreachable");
 		}

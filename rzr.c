@@ -377,19 +377,51 @@ static inline void* scratch_allocn_ex(struct scratch* scratch, int is_tail_alloc
 #define SCRATCH_TAIL_ALLOC(N) scratch_allocn_ex(SCRATCHP, 1, 1, 0, 0, N)
 #define SCRATCH_TAIL_YANK(N)  scratch_allocn_ex(SCRATCHP, 1, 0, 0, 0, N) // doesn't clear allocation; use together with SCRATCH_TAIL_REMAINING() to write ahead
 
+static inline int get_next_skip(int n_sizes, const int* sizes, int current_value)
+{
+	int acc = 0;
+	for (int i = 0; i < n_sizes; i++) {
+		const int size = sizes[i];
+		if (size < 0) {
+			if (acc > current_value) {
+				return acc;
+			}
+		} else {
+			assert(size > 0);
+			acc += size;
+		}
+	}
+	return -1;
+}
+
+static inline int get_next_yskip(struct rzr* rzr, int current_y)
+{
+	return get_next_skip(rzr->n_heights, rzr->heights, current_y);
+}
+
+
 struct spanline {
 	int n;
 	struct span* spans;
 };
 
-static void subrender(uint8_t* out_pixels, int width, int ss, struct spanline* sub_scanlines)
+static void subrender(uint8_t* out_pixels, int n_widths, const int* widths, int ss, struct spanline* sub_scanlines)
 {
 	int cursors[RZR_MAX_SUPERSAMPLING_FACTOR];
 	assert(0 < ss && ss <= RZR_MAX_SUPERSAMPLING_FACTOR);
 	memset(cursors, 0, ss*sizeof(cursors[0]));
 	const int ssss = ss*ss;
 	int x = 0;
-	while (x < width) {
+	int virtual_width = 0;
+	for (int i = 0; i < n_widths; i++) {
+		const int w = widths[i];
+		if (w < 0) continue;
+		assert(w > 0);
+		virtual_width += w;
+	}
+	int next_x_skip = get_next_skip(n_widths, widths, -1);
+	int x_skip = 0;
+	while (x < virtual_width) {
 		const int xx0 = x*ss;
 		const int xx1 = xx0+ss-1;
 		int v_pixel=0, v_tail=0;
@@ -400,7 +432,7 @@ static void subrender(uint8_t* out_pixels, int width, int ss, struct spanline* s
 				int c = cursors[i];
 				if (c >= line->n) {
 					// no more spans
-					if (rlx == -1) rlx = width;
+					if (rlx == -1) rlx = virtual_width;
 					break;
 				}
 				struct span* span = &line->spans[c];
@@ -408,7 +440,7 @@ static void subrender(uint8_t* out_pixels, int width, int ss, struct spanline* s
 				assert(sxx0 >= 0);
 				assert(span->w > 0);
 				const int sxx1 = sxx0 + span->w - 1;
-				assert(sxx1 < ss*width);
+				assert(sxx1 < ss*virtual_width);
 				if (sxx1 < xx0) {
 					// current span lies before current
 					// pixel cell; advance cursor
@@ -450,17 +482,37 @@ static void subrender(uint8_t* out_pixels, int width, int ss, struct spanline* s
 			}
 		}
 
-		out_pixels[x] = (v_pixel * 255) / ssss;
-		//printf("   px[%d] <- %d\n", x, out_pixels[x]);
+		if (x == next_x_skip) {
+			next_x_skip = get_next_skip(n_widths, widths, x);
+			x_skip++;
+		}
+		out_pixels[x+x_skip] = (v_pixel * 255) / ssss;
 		x++;
+		if (x == next_x_skip) {
+			next_x_skip = get_next_skip(n_widths, widths, x);
+			x_skip++;
+		}
 		if (rlx >= 0) {
 			int n = rlx-x;
-			if (x+n > width) n = width-x;
+			if (x+n > virtual_width) n = virtual_width-x;
 			if (n > 0) {
 				const int v = (v_tail * 255) / ssss;
-				memset(out_pixels+x, v, n);
-				//printf("   px[%d:%d] <- %d (vtail=%d)\n", x, x+n-1, v, v_tail);
-				x += n;
+				while (n > 0) {
+					int nn = n;
+					int skip=0;
+					if (next_x_skip >= 0 && x+n >= next_x_skip) {
+						nn = next_x_skip-x;
+						skip=1;
+					}
+					assert(nn > 0);
+					memset(out_pixels+x+x_skip, v, nn);
+					x += nn;
+					if (skip) {
+						x_skip++;
+						next_x_skip = get_next_skip(n_widths, widths, x);
+					}
+					n -= nn;
+				}
 			}
 		}
 	}
@@ -502,13 +554,114 @@ static int poly_xedge_compar(const void* va, const void* vb)
 	return dside;
 }
 
+int rzr_subpixel_query(struct rzr* rzr, int subx, int suby)
+{
+	const int n_ops = rzr->prg_length;
+	const size_t stack_cap = 1<<16;
+	int stack_height = 0;
+	uint8_t stack[stack_cap];
+	#define PUSH(v) (assert(stack_height < stack_cap), stack[stack_height++]=(v))
+	#define POP()   (assert(stack_height > 0), stack[--stack_height])
+	for (int pc = 0; pc < n_ops; pc++) {
+		struct rzr_op* op = &rzr->prg[pc];
+		const int opcode = op->code;
+		switch (opcode) {
+		case RZROP_CIRCLE: {
+			const int64_t dx = subx - op->circle.cx;
+			const int64_t dy = suby - op->circle.cy;
+			const int64_t d2 = dx*dx + dy*dy;
+			const int64_t r = op->circle.radius;
+			const int v = d2 <= r*r;
+			PUSH(v);
+		}	break;
+		case RZROP_POLY: {
+			const int n = op->poly.n_vertices;
+			int iprev = n-1;
+			int acc = 0;
+			for (int i = 0; i < n; i++) {
+				struct rzr_op* voprev = &rzr->prg[pc+1+iprev];
+				iprev = i;
+				struct rzr_op* vop = &rzr->prg[pc+1+i];
+				assert(voprev->code == RZROP_VERTEX);
+				assert(vop->code == RZROP_VERTEX);
+				const int p0x = voprev->vertex.x;
+				const int p0y = voprev->vertex.y;
+				const int p1x = vop->vertex.x;
+				const int p1y = vop->vertex.y;
+				if (p0y == p1y) continue;
+				const int y0 = p0y < p1y ? p0y : p1y;
+				const int y1 = p0y > p1y ? p0y : p1y;
+				assert(y0 <= y1);
+				if (!(y0 <= suby && suby < y1)) continue;
+				if (p1y < p0y) {
+					// left edge; increment accumulator if
+					// point lies on or after edge
+					if (subx >= lineseg_eval_x_at_y(p1x, p1y, p0x, p0y, suby)) acc++;
+				} else if (p1y > p0y) {
+					// right edge; decrement accumulator if
+					// point lies after edge
+					if (subx > lineseg_eval_x_at_y(p0x, p0y, p1x, p1y, suby)) acc--;
+				} else {
+					assert(!"unreachable");
+				}
+			}
+			const int v = acc>0;
+			PUSH(v);
+			pc += n;
+		}	break;
+		case RZROP_UNION: {
+			const int b = POP();
+			const int a = POP();
+			PUSH(a || b);
+		}	break;
+		case RZROP_DIFFERENCE: {
+			const int b = POP();
+			const int a = POP();
+			PUSH(a && !b);
+		}	break;
+		case RZROP_INTERSECTION: {
+			const int b = POP();
+			const int a = POP();
+			PUSH(a && b);
+		}	break;
+		default: assert(!"unhandled case");
+		}
+	}
+	const int r = POP();
+	#undef POP
+	#undef PUSH
+	return r;
+}
+
+void rzr_subpixel_queries(struct rzr* rzr, int n, int* subpixel_coord_pairs, int* out_inside)
+{
+	int* p = out_inside;
+	for (int i = 0; i < n; i++) {
+		const int subx = subpixel_coord_pairs[i<<1];
+		const int suby = subpixel_coord_pairs[(i<<1)+1];
+		const int is_inside = rzr_subpixel_query(rzr, subx, suby);
+		if (p != NULL) *(p++) = is_inside;
+	}
+}
+
+int rzr_query(struct rzr* rzr, int x, int y)
+{
+	return rzr_subpixel_query(rzr, x*rzr->supersampling_factor, y*rzr->supersampling_factor);
+}
+
+void rzr_queries(struct rzr* rzr, int n, int* coord_pairs, int* out_inside)
+{
+	int* p = out_inside;
+	for (int i = 0; i < n; i++) {
+		const int x = coord_pairs[i<<1];
+		const int y = coord_pairs[(i<<1)+1];
+		const int is_inside = rzr_query(rzr, x, y);
+		if (p != NULL) *(p++) = is_inside;
+	}
+}
+
 static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_t* pixels)
 {
-	assert(!rzr->mxn_mode && "MxN not implemented");
-	#if 0
-	printf("sizeof(struct rzr_op) = %zd\n", sizeof(struct rzr_op)); // XXX
-	#endif
-
 	const int NIL = -1;
 
 	const int n_ops = rzr->prg_length;
@@ -585,8 +738,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		pc2ysli[pc] = yspan_list_index;
 	}
 	assert(n_remaining_vertices == 0);
-
-	//printf("n polys %d vertices %d\n", n_polys, n_vertices);
 
 	int** circles_xs = SCRATCH_ALLOCN(n_circle, int*);
 	int* xs_storage = SCRATCH_ALLOCN(circle_radius_sum, int);
@@ -1066,6 +1217,8 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 	}
 	SCRATCH_TAIL_ALLOC_END();
 
+	//////////////////////////////////////
+	// setup polygon render states
 	struct xedge_state {
 		int x,xstep;
 		int numerator;
@@ -1099,341 +1252,422 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 	if (stack_height < 1) return;
 
-	{
-		const int top = POP();
-		struct yspan_list* ysl = &yspan_lists[pc2ysli[top]];
+	//////////////////////////
+	// begin actual render
 
-		const int post_order_stack_cap = 1<<10; // XXX do a proper estimate / upper bound thing?
-		int* post_order_stack = SCRATCH_ALLOCN(post_order_stack_cap, int);
+	const int top = POP();
+	struct yspan_list* ysl = &yspan_lists[pc2ysli[top]];
 
-		struct xop {
-			int opcode;
-			union {
-				struct {
-					int cx,cy,radius;
-					int resource_index;
-				} circle;
-				struct {
-					int yspans_i0, yspans_i1;
-				} poly;
-			};
+	const int post_order_stack_cap = 1<<10; // XXX do a proper estimate / upper bound thing?
+	int* post_order_stack = SCRATCH_ALLOCN(post_order_stack_cap, int);
+
+	struct xop {
+		int opcode;
+		union {
+			struct {
+				int cx,cy,radius;
+				int resource_index;
+			} circle;
+			struct {
+				int yspans_i0, yspans_i1;
+			} poly;
 		};
+	};
 
-		const int xop_cap = 1<<10; // XXX do a proper upper bound thing?
-		struct xop* xops = SCRATCH_ALLOCN(xop_cap, struct xop);
-		#if 0
-		printf("sizeof(struct xop)=%zd\n", sizeof(struct xop));
-		//assert(!"STOP");
-		#endif
+	const int xop_cap = 1<<10; // XXX do a proper upper bound thing?
+	struct xop* xops = SCRATCH_ALLOCN(xop_cap, struct xop);
+	#if 0
+	printf("sizeof(struct xop)=%zd\n", sizeof(struct xop));
+	//assert(!"STOP");
+	#endif
 
-		const int supsamp = rzr_get_supersampling_factor(rzr);
-		assert(supsamp > 0);
-		struct spanline* sub_scanlines = SCRATCH_ALLOCN(supsamp, struct spanline);
-		//memset(sub_scanlines, 0, sizeof(sub_scanlines[0])*supsamp);
+	const int supsamp = rzr_get_supersampling_factor(rzr);
+	assert(supsamp > 0);
+	struct spanline* sub_scanlines = SCRATCH_ALLOCN(supsamp, struct spanline);
+	//memset(sub_scanlines, 0, sizeof(sub_scanlines[0])*supsamp);
 
-		const int width_subpix = rzr->width*supsamp;
+	const int virutal_width_subpix = rzr->virtual_width*supsamp;
 
-		int y_render_min=-1, y_render_max=-1;
-		const struct scratch SCRATCH_SNAPSHOT = scratch_save(SCRATCHP);
-		struct span* span_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct span);
-		uint8_t* ppix = NULL;
-		const int yy1 = rzr->height * supsamp - 1;
-		for (int i = 0; i < ysl->n; i++) {
-			const int iroot = ysl->offset+i;
-			struct yspan* yroot = &yspan_stor[iroot];
-			if (i > 0) assert(yroot->y0 > yspan_stor[iroot-1].y1);
-			assert(yroot->pc == top);
-			if (yroot->y1 < 0 || yroot->y0 > yy1) continue;
-			const int root_y0 = yroot->y0 < 0 ? 0 : yroot->y0;
-			const int root_y1 = yroot->y1 > yy1 ? yy1 : yroot->y1;
+	int y_render_min=-1, y_render_max=-1;
+	const struct scratch SCRATCH_SNAPSHOT = scratch_save(SCRATCHP);
+	struct span* span_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct span);
+	uint8_t* ppix = NULL;
+	const int yy1 = rzr->virtual_height * supsamp - 1;
+	int next_yy_skip = get_next_skip(rzr->n_heights, rzr->heights, -1);
+	int yy_skip = 0;
+	for (int i = 0; i < ysl->n; i++) {
+		const int iroot = ysl->offset+i;
+		struct yspan* yroot = &yspan_stor[iroot];
+		if (i > 0) assert(yroot->y0 > yspan_stor[iroot-1].y1);
+		assert(yroot->pc == top);
+		if (yroot->y1 < 0 || yroot->y0 > yy1) continue;
+		const int root_y0 = yroot->y0 < 0 ? 0 : yroot->y0;
+		const int root_y1 = yroot->y1 > yy1 ? yy1 : yroot->y1;
 
-			int post_order_stack_height = 0;
-			int cursor = iroot;
-			int n_xop = 0;
+		int post_order_stack_height = 0;
+		int cursor = iroot;
+		int n_xop = 0;
 
-			// post-order tree traversal to create compact program
-			// in `xops`
-			do {
-				while (cursor >= 0) {
-					const int b = yspan_stor[cursor].ysi_b;
-					if (b >= 0) {
-						assert(post_order_stack_height < post_order_stack_cap);
-						post_order_stack[post_order_stack_height++] = b;
-					}
-					assert(post_order_stack_height < post_order_stack_cap);
-					post_order_stack[post_order_stack_height++] = cursor;
-					cursor = yspan_stor[cursor].ysi_a;
-				}
-				cursor = post_order_stack[--post_order_stack_height];
+		// post-order tree traversal to create compact program
+		// in `xops`
+		do {
+			while (cursor >= 0) {
 				const int b = yspan_stor[cursor].ysi_b;
-				if (b >= 0 && (post_order_stack_height == 0 ? NIL : post_order_stack[post_order_stack_height-1]) == b) {
-					post_order_stack[post_order_stack_height-1] = cursor;
-					cursor = b;
-				} else {
-					assert(cursor >= 0);
-					struct yspan v = yspan_stor[cursor];
-					const int pc = v.pc;
-					assert(v.y0 <= root_y0 && v.y1 >= root_y1);
-					struct rzr_op* op = &rzr->prg[pc];
-
-					struct xop* xop = NULL;
-
-					int passthru_binop=0, binop=0;
-
-					#define SHAPE_XOP() \
-						assert(v.ysi_a == NIL); \
-						assert(v.ysi_b == NIL); \
-						assert(n_xop < xop_cap); \
-						xop = &xops[n_xop++]; \
-						memset(xop, 0, sizeof *xop);
-
-					switch (op->code) {
-
-					case RZROP_CIRCLE: {
-						SHAPE_XOP();
-						xop->circle.cx = op->circle.cx;
-						xop->circle.cy = op->circle.cy;
-						xop->circle.radius = op->circle.radius;
-						xop->circle.resource_index = pc2ri[pc];
-					}	break;
-
-					case RZROP_POLY: {
-						SHAPE_XOP();
-						struct poly* poly = &polys[pc2ri[pc]];
-						const int n = poly->yspan_count;
-						const int yspan_offset = poly->yspan_offset;
-						struct poly_yspan* yp = &poly_yspans[yspan_offset];
-						int i0=-1, i1=-1;
-						for (int i = 0; i < n; i++, yp++) {
-							const int o = ispans_overlap(root_y0, root_y1, yp->y0, yp->y1);
-							if (o) {
-								if (i0 == -1) i0 = i;
-								i1 = i;
-							} else if (!o && i0 >= 0) {
-								break;
-							}
-						}
-						assert(i0 >= 0);
-						assert(i1 >= 0);
-						xop->poly.yspans_i0 = yspan_offset + i0;
-						xop->poly.yspans_i1 = yspan_offset + i1;
-					}	break;
-
-					case RZROP_VERTEX: {
-						assert(!"NOT EXPECTED: error in RZROP_POLY handler?");
-					}	break;
-
-					case RZROP_UNION: {
-						assert((v.ysi_a >= 0 || v.ysi_b >= 0) && "bad binop/union prep");
-						if ((v.ysi_a == NIL) || (v.ysi_b == NIL)) {
-							passthru_binop = 1;
-						} else {
-							assert(v.ysi_a >= 0 && v.ysi_b >= 0);
-							binop = 1;
-						}
-					}	break;
-
-					case RZROP_DIFFERENCE: {
-						assert((v.ysi_a >= 0) && "bad binop/difference prep");
-						if (v.ysi_b == NIL) {
-							passthru_binop = 1;
-						} else {
-							binop = 1;
-						}
-					}	break;
-
-					case RZROP_INTERSECTION: {
-						assert((v.ysi_a >= 0 && v.ysi_b >= 0) && "bad binop/intersection prep");
-						binop = 1;
-					}	break;
-
-					default: assert(!"unhandled opcode");
-					}
-
-					if (binop) {
-						assert(xop == NULL);
-						assert(n_xop < xop_cap);
-						xop = &xops[n_xop++];
-						memset(xop, 0, sizeof *xop);
-						assert(n_xop >= 2);
-					} else if (passthru_binop) {
-						assert(xop == NULL);
-					} else {
-						assert(xop != NULL);
-					}
-
-					if (xop != NULL) {
-						xop->opcode = op->code;
-					}
-
-					cursor = -1;
+				if (b >= 0) {
+					assert(post_order_stack_height < post_order_stack_cap);
+					post_order_stack[post_order_stack_height++] = b;
 				}
-			} while (post_order_stack_height > 0);
+				assert(post_order_stack_height < post_order_stack_cap);
+				post_order_stack[post_order_stack_height++] = cursor;
+				cursor = yspan_stor[cursor].ysi_a;
+			}
+			cursor = post_order_stack[--post_order_stack_height];
+			const int b = yspan_stor[cursor].ysi_b;
+			if (b >= 0 && (post_order_stack_height == 0 ? NIL : post_order_stack[post_order_stack_height-1]) == b) {
+				post_order_stack[post_order_stack_height-1] = cursor;
+				cursor = b;
+			} else {
+				assert(cursor >= 0);
+				struct yspan v = yspan_stor[cursor];
+				const int pc = v.pc;
+				assert(v.y0 <= root_y0 && v.y1 >= root_y1);
+				struct rzr_op* op = &rzr->prg[pc];
 
-			// execute xop-program for each sub-scanline in [root_y0;root_y1]
-			for (int y = root_y0; y <= root_y1; y++) {
-				const int sub_scanline_i = (y % supsamp);
-				const int yy = (y / supsamp);
-				assert(0 <= yy && yy < rzr->height);
-				if (y_render_min == -1 || yy < y_render_min) y_render_min = yy;
-				if (y_render_max == -1 || yy > y_render_max) y_render_max = yy;
+				struct xop* xop = NULL;
 
-				struct rlist { int offset,count; };
-				const int rstack_cap = 1<<13;
-				int rstack_height = 0;
-				struct rlist rstack[rstack_cap];
+				int passthru_binop=0, binop=0;
 
-				#define NSPAN(N,SPAN0) \
-				{ \
-					const int _n = N; \
-					struct span* _p = SPAN0; \
-					for (int _i = 0; _i < _n; _i++) { \
-						struct span _s = *(_p++); \
-						if (_s.x < 0) { \
-							_s.w += _s.x; \
-							_s.x = 0; \
-						} \
-						if (_s.x+_s.w > width_subpix) _s.w = width_subpix-_s.x; \
-						if (_s.w <= 0) continue; \
-						struct span* _dst = SCRATCH_TAIL_ALLOC(1); \
-						*_dst = _s; \
-					} \
-				}
+				#define SHAPE_XOP() \
+					assert(v.ysi_a == NIL); \
+					assert(v.ysi_b == NIL); \
+					assert(n_xop < xop_cap); \
+					xop = &xops[n_xop++]; \
+					memset(xop, 0, sizeof *xop);
 
-				for (int xpc = 0; xpc < n_xop; xpc++) {
-					struct xop* xop = &xops[xpc];
-					const int offset0 = SCRATCH_TAIL_OFFSET();
-					switch (xop->opcode) {
+				switch (op->code) {
 
-					case RZROP_CIRCLE: {
-						const int cx = xop->circle.cx;
-						const int cy = xop->circle.cy;
-						const int radius = xop->circle.radius;
-						const int ri = xop->circle.resource_index;
-						int ay = y-cy;
-						if (ay < 0) ay = -ay;
-						int* xs = circles_xs[ri];
-						assert(0 <= ay && ay < radius);
-						const int dx = xs[ay];
-						struct span span = {
-							.x = cx-dx+1,
-							.w = dx+dx-1,
-						};
-						NSPAN(1, &span);
-					}	break;
+				case RZROP_CIRCLE: {
+					SHAPE_XOP();
+					xop->circle.cx = op->circle.cx;
+					xop->circle.cy = op->circle.cy;
+					xop->circle.radius = op->circle.radius;
+					xop->circle.resource_index = pc2ri[pc];
+				}	break;
 
-					case RZROP_POLY: {
-						const int yspans_i0 = xop->poly.yspans_i0;
-						const int yspans_i1 = xop->poly.yspans_i1;
-						struct poly_yspan* ps = NULL;
-						for (int i = yspans_i0; i <= yspans_i1; i++) {
-							struct poly_yspan* tps = &poly_yspans[i];
-							if (!(tps->y0 <= y && y <= tps->y1)) continue;
-							ps = tps;
+				case RZROP_POLY: {
+					SHAPE_XOP();
+					struct poly* poly = &polys[pc2ri[pc]];
+					const int n = poly->yspan_count;
+					const int yspan_offset = poly->yspan_offset;
+					struct poly_yspan* yp = &poly_yspans[yspan_offset];
+					int i0=-1, i1=-1;
+					for (int i = 0; i < n; i++, yp++) {
+						const int o = ispans_overlap(root_y0, root_y1, yp->y0, yp->y1);
+						if (o) {
+							if (i0 == -1) i0 = i;
+							i1 = i;
+						} else if (!o && i0 >= 0) {
 							break;
 						}
-						assert(ps != NULL);
-						const int xspan_offset = ps->xspan_offset;
-						const int xspan_count = ps->xspan_count;
+					}
+					assert(i0 >= 0);
+					assert(i1 >= 0);
+					xop->poly.yspans_i0 = yspan_offset + i0;
+					xop->poly.yspans_i1 = yspan_offset + i1;
+				}	break;
 
-						for (int si = 0; si < xspan_count; si++) {
-							struct xspan_state* xs = &xspan_states_stor[xspan_offset+si];
-							while (xs->y <= y) {
-								struct span span = {
-									.x = xs->edge_states[0].x,
-									.w = xs->edge_states[1].x - xs->edge_states[0].x,
-								};
-								if (span.w > 0 && xs->y == y) {
-									NSPAN(1, &span);
-								}
-								for (int ei = 0; ei < 2; ei++) {
-									struct xedge_state* es = &xs->edge_states[ei];
-									assert(es->numerator >= 0);
-									es->accumulator += es->numerator;
-									const int n = es->accumulator / es->denominator;
-									es->x += es->xstep * n;
-									es->accumulator -= es->denominator * n;
-								}
-								xs->y++;
+				case RZROP_VERTEX: {
+					assert(!"NOT EXPECTED: error in RZROP_POLY handler?");
+				}	break;
+
+				case RZROP_UNION: {
+					assert((v.ysi_a >= 0 || v.ysi_b >= 0) && "bad binop/union prep");
+					if ((v.ysi_a == NIL) || (v.ysi_b == NIL)) {
+						passthru_binop = 1;
+					} else {
+						assert(v.ysi_a >= 0 && v.ysi_b >= 0);
+						binop = 1;
+					}
+				}	break;
+
+				case RZROP_DIFFERENCE: {
+					assert((v.ysi_a >= 0) && "bad binop/difference prep");
+					if (v.ysi_b == NIL) {
+						passthru_binop = 1;
+					} else {
+						binop = 1;
+					}
+				}	break;
+
+				case RZROP_INTERSECTION: {
+					assert((v.ysi_a >= 0 && v.ysi_b >= 0) && "bad binop/intersection prep");
+					binop = 1;
+				}	break;
+
+				default: assert(!"unhandled opcode");
+				}
+
+				if (binop) {
+					assert(xop == NULL);
+					assert(n_xop < xop_cap);
+					xop = &xops[n_xop++];
+					memset(xop, 0, sizeof *xop);
+					assert(n_xop >= 2);
+				} else if (passthru_binop) {
+					assert(xop == NULL);
+				} else {
+					assert(xop != NULL);
+				}
+
+				if (xop != NULL) {
+					xop->opcode = op->code;
+				}
+
+				cursor = -1;
+			}
+		} while (post_order_stack_height > 0);
+
+		// execute xop-program for each sub-scanline in [root_y0;root_y1]
+		for (int y = root_y0; y <= root_y1; y++) {
+			const int sub_scanline_i = (y % supsamp);
+			const int yy = (y / supsamp);
+			if (yy == next_yy_skip) {
+				next_yy_skip = get_next_skip(rzr->n_heights, rzr->heights, yy);
+				yy_skip++;
+			}
+			assert(0 <= yy && yy < rzr->virtual_height);
+			if (y_render_min == -1 || yy < y_render_min) y_render_min = yy;
+			if (y_render_max == -1 || yy > y_render_max) y_render_max = yy;
+
+			struct rlist { int offset,count; };
+			const int rstack_cap = 1<<13;
+			int rstack_height = 0;
+			struct rlist rstack[rstack_cap];
+
+			#define NSPAN(N,SPAN0) \
+			{ \
+				const int _n = N; \
+				struct span* _p = SPAN0; \
+				for (int _i = 0; _i < _n; _i++) { \
+					struct span _s = *(_p++); \
+					if (_s.x < 0) { \
+						_s.w += _s.x; \
+						_s.x = 0; \
+					} \
+					if (_s.x+_s.w > virutal_width_subpix) _s.w = virutal_width_subpix-_s.x; \
+					if (_s.w <= 0) continue; \
+					struct span* _dst = SCRATCH_TAIL_ALLOC(1); \
+					*_dst = _s; \
+				} \
+			}
+
+			for (int xpc = 0; xpc < n_xop; xpc++) {
+				struct xop* xop = &xops[xpc];
+				const int offset0 = SCRATCH_TAIL_OFFSET();
+				switch (xop->opcode) {
+
+				case RZROP_CIRCLE: {
+					const int cx = xop->circle.cx;
+					const int cy = xop->circle.cy;
+					const int radius = xop->circle.radius;
+					const int ri = xop->circle.resource_index;
+					int ay = y-cy;
+					if (ay < 0) ay = -ay;
+					int* xs = circles_xs[ri];
+					assert(0 <= ay && ay < radius);
+					const int dx = xs[ay];
+					struct span span = {
+						.x = cx-dx+1,
+						.w = dx+dx-1,
+					};
+					NSPAN(1, &span);
+				}	break;
+
+				case RZROP_POLY: {
+					const int yspans_i0 = xop->poly.yspans_i0;
+					const int yspans_i1 = xop->poly.yspans_i1;
+					struct poly_yspan* ps = NULL;
+					for (int i = yspans_i0; i <= yspans_i1; i++) {
+						struct poly_yspan* tps = &poly_yspans[i];
+						if (!(tps->y0 <= y && y <= tps->y1)) continue;
+						ps = tps;
+						break;
+					}
+					assert(ps != NULL);
+					const int xspan_offset = ps->xspan_offset;
+					const int xspan_count = ps->xspan_count;
+
+					for (int si = 0; si < xspan_count; si++) {
+						struct xspan_state* xs = &xspan_states_stor[xspan_offset+si];
+						while (xs->y <= y) {
+							struct span span = {
+								.x = xs->edge_states[0].x,
+								.w = xs->edge_states[1].x - xs->edge_states[0].x,
+							};
+							if (span.w > 0 && xs->y == y) {
+								NSPAN(1, &span);
 							}
+							for (int ei = 0; ei < 2; ei++) {
+								struct xedge_state* es = &xs->edge_states[ei];
+								assert(es->numerator >= 0);
+								es->accumulator += es->numerator;
+								const int n = es->accumulator / es->denominator;
+								es->x += es->xstep * n;
+								es->accumulator -= es->denominator * n;
+							}
+							xs->y++;
 						}
-
-					}	break;
-
-					case RZROP_UNION:
-					case RZROP_DIFFERENCE:
-					case RZROP_INTERSECTION: {
-						assert(rstack_height >= 2);
-						struct rlist rb = rstack[--rstack_height];
-						struct rlist ra = rstack[--rstack_height];
-						struct span* aa = span_stor + ra.offset;
-						struct span* bb = span_stor + rb.offset;
-						const int nr = spanlist_binop(xop->opcode, SCRATCH_AT(), SCRATCH_TAIL_REMAINING(), ra.count, aa, rb.count, bb);
-						SCRATCH_TAIL_YANK(nr);
-					}	break;
-
-					default: assert(!"unhandled case");
 					}
 
-					const int nspans = SCRATCH_TAIL_OFFSET() - offset0;
-					for (int i = 0; i < nspans; i++) {
-						struct span s = span_stor[offset0+i];
-						assert(s.x >= 0);
-						assert(s.w > 0);
-						assert(s.x+s.w <= width_subpix);
-					}
-					assert(rstack_height < rstack_cap);
-					struct rlist* rl = &rstack[rstack_height++];
-					rl->offset = offset0;
-					rl->count = nspans;
+				}	break;
+
+				case RZROP_UNION:
+				case RZROP_DIFFERENCE:
+				case RZROP_INTERSECTION: {
+					assert(rstack_height >= 2);
+					struct rlist rb = rstack[--rstack_height];
+					struct rlist ra = rstack[--rstack_height];
+					struct span* aa = span_stor + ra.offset;
+					struct span* bb = span_stor + rb.offset;
+					const int nr = spanlist_binop(xop->opcode, SCRATCH_AT(), SCRATCH_TAIL_REMAINING(), ra.count, aa, rb.count, bb);
+					SCRATCH_TAIL_YANK(nr);
+				}	break;
+
+				default: assert(!"unhandled case");
 				}
 
-				assert(rstack_height > 0);
-				struct rlist rx = rstack[--rstack_height];
-
-				assert(0 <= sub_scanline_i && sub_scanline_i < supsamp);
-				struct spanline* ssc = &sub_scanlines[sub_scanline_i];
-				ssc->spans = span_stor + rx.offset;
-				ssc->n = rx.count;
-
-				//printf("render y=%d / %d str=%d\n", y, y/supsamp, stride);
-				ppix = pixels + yy * stride;
-				if (sub_scanline_i == (supsamp-1)) {
-					//printf("emit at y=%d\n", y);
-					subrender(ppix, rzr->width, supsamp, sub_scanlines);
-					// reset scratch
-					SCRATCH_TAIL_ALLOC_END();
-					scratch_restore(SCRATCHP, &SCRATCH_SNAPSHOT);
-					span_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct span);
-					memset(sub_scanlines, 0, sizeof(sub_scanlines[0])*supsamp);
+				const int nspans = SCRATCH_TAIL_OFFSET() - offset0;
+				for (int i = 0; i < nspans; i++) {
+					struct span s = span_stor[offset0+i];
+					assert(s.x >= 0);
+					assert(s.w > 0);
+					assert(s.x+s.w <= virutal_width_subpix);
 				}
+				assert(rstack_height < rstack_cap);
+				struct rlist* rl = &rstack[rstack_height++];
+				rl->offset = offset0;
+				rl->count = nspans;
+			}
+
+			assert(rstack_height > 0);
+			struct rlist rx = rstack[--rstack_height];
+
+			assert(0 <= sub_scanline_i && sub_scanline_i < supsamp);
+			struct spanline* ssc = &sub_scanlines[sub_scanline_i];
+			ssc->spans = span_stor + rx.offset;
+			ssc->n = rx.count;
+
+			ppix = pixels + (yy + yy_skip) * stride;
+			if (sub_scanline_i == (supsamp-1)) {
+				subrender(ppix, rzr->n_widths, rzr->widths, supsamp, sub_scanlines);
+				// reset scratch
+				SCRATCH_TAIL_ALLOC_END();
+				scratch_restore(SCRATCHP, &SCRATCH_SNAPSHOT);
+				span_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct span);
+				memset(sub_scanlines, 0, sizeof(sub_scanlines[0])*supsamp);
 			}
 		}
-		if (SCRATCH_TAIL_OFFSET() > 0) {
-			subrender(ppix, rzr->width, supsamp, sub_scanlines);
-		}
-		SCRATCH_TAIL_ALLOC_END();
+	}
+	if (SCRATCH_TAIL_OFFSET() > 0) {
+		subrender(ppix, rzr->n_widths, rzr->widths, supsamp, sub_scanlines);
+	}
+	SCRATCH_TAIL_ALLOC_END();
 
-		if (y_render_min > 0) {
-			uint8_t* p = pixels;
-			for (int y = 0; y < y_render_min; y++) {
-				memset(p, 0, rzr->width);
+	if (y_render_min > 0) {
+		uint8_t* p = pixels;
+		int next_y_skip = get_next_yskip(rzr, -1);
+		for (int y = 0; y < y_render_min; y++) {
+			if (y == next_y_skip) {
+				next_y_skip = get_next_yskip(rzr, y);
 				p += stride;
 			}
+			memset(p, 0, rzr->bitmap_width);
+			p += stride;
 		}
+	}
 
-		if (y_render_max >= 0) {
-			const int h = rzr->height;
-			const int y0 = y_render_max+1;
-			uint8_t* p = pixels + y0*stride;
-			for (int y = y0; y < h; y++) {
-				memset(p, 0, rzr->width);
+	if (y_render_max >= 0) {
+		const int h = rzr->virtual_height;
+		const int y0 = y_render_max+1;
+		int next_y_skip = get_next_yskip(rzr, y0-1);
+		uint8_t* p = pixels + y0*stride;
+		for (int y = y0; y < h; y++) {
+			if (y == next_y_skip) {
+				next_y_skip = get_next_yskip(rzr, y);
 				p += stride;
 			}
+			memset(p, 0, rzr->bitmap_width);
+			p += stride;
 		}
 	}
 
 	//printf("allocated/max:    %zd\n", SCRATCH.cursor_max);
+
+	// render "stretch regions" using point queries (only applicable to MxN
+	// renders)
+	for (int axis = 0; axis < 2; axis++) {
+		int vcursor = 0;
+		int bcursor = 0;
+		const int n_usizes = (axis==0) ? rzr->n_widths : (axis==1) ? rzr->n_heights : 0;
+		const int* usizes  = (axis==0) ? rzr->widths   : (axis==1) ? rzr->heights   : NULL;
+		for (int i0 = 0; i0 < n_usizes; i0++) {
+			const int size = usizes[i0];
+			if (size < 0) {
+				const int subpos = vcursor * rzr->supersampling_factor;
+				int n,xx,yy,dxx,dyy;
+				uint8_t* p;
+				int pinc;
+				int n_vsizes;
+				int* vsizes;
+				if (axis == 0) {
+					p = pixels + bcursor;
+					n = rzr->virtual_height;
+					xx = subpos;
+					dxx = 0;
+					yy = 0;
+					dyy = 1;
+					pinc = stride;
+					n_vsizes = rzr->n_heights;
+					vsizes = rzr->heights;
+				} else if (axis == 1) {
+					p = pixels + bcursor*stride;
+					n = rzr->virtual_width;
+					xx = 0;
+					dxx = 1;
+					yy = subpos;
+					dyy = 0;
+					pinc = 1;
+					n_vsizes = rzr->n_widths;
+					vsizes = rzr->widths;
+				} else {
+					assert(!"unreachable");
+				}
+
+				int next_vskip = get_next_skip(n_vsizes, vsizes, -1);
+				for (int i1 = 0; i1 < n; i1++) {
+					if (i1 == next_vskip) {
+						*(p) = rzr_subpixel_query(rzr, xx, yy) ? 255 : 0;
+						next_vskip = get_next_skip(n_vsizes, vsizes, i1);
+						assert(next_vskip > i1 || next_vskip == -1);
+						p += pinc;
+					}
+					int acc = 0;
+					for (int i2 = 0; i2 < supsamp; i2++) {
+						acc += rzr_subpixel_query(rzr, xx, yy);
+						xx += dxx;
+						yy += dyy;
+					}
+					*p = (acc * 255) / supsamp;
+					p += pinc;
+				}
+				bcursor++;
+			} else {
+				assert(size > 0);
+				vcursor += size;
+				bcursor += size;
+			}
+		}
+	}
 
 	#undef PUSH_YSPAN
 	#undef NEW_YSPAN_LIST
@@ -1446,112 +1680,6 @@ void rzr_render(struct rzr* rzr, size_t scratch_cap, void* scratch_stor, int str
 	struct scratch s = setup_scratch(scratch_cap, scratch_stor);
 	render(rzr, &s, stride, pixels);
 	if (s.cursor_max > rzr->scratch_alloc_max) rzr->scratch_alloc_max = s.cursor_max;
-}
-
-int rzr_subpixel_query(struct rzr* rzr, int subx, int suby)
-{
-	const int n_ops = rzr->prg_length;
-	const size_t stack_cap = 1<<16;
-	int stack_height = 0;
-	uint8_t stack[stack_cap];
-	#define PUSH(v) (assert(stack_height < stack_cap), stack[stack_height++]=(v))
-	#define POP()   (assert(stack_height > 0), stack[--stack_height])
-	for (int pc = 0; pc < n_ops; pc++) {
-		struct rzr_op* op = &rzr->prg[pc];
-		const int opcode = op->code;
-		switch (opcode) {
-		case RZROP_CIRCLE: {
-			const int64_t dx = subx - op->circle.cx;
-			const int64_t dy = suby - op->circle.cy;
-			const int64_t d2 = dx*dx + dy*dy;
-			const int64_t r = op->circle.radius;
-			const int v = d2 <= r*r;
-			PUSH(v);
-		}	break;
-		case RZROP_POLY: {
-			const int n = op->poly.n_vertices;
-			int iprev = n-1;
-			int acc = 0;
-			for (int i = 0; i < n; i++) {
-				struct rzr_op* voprev = &rzr->prg[pc+1+iprev];
-				iprev = i;
-				struct rzr_op* vop = &rzr->prg[pc+1+i];
-				assert(voprev->code == RZROP_VERTEX);
-				assert(vop->code == RZROP_VERTEX);
-				const int p0x = voprev->vertex.x;
-				const int p0y = voprev->vertex.y;
-				const int p1x = vop->vertex.x;
-				const int p1y = vop->vertex.y;
-				if (p0y == p1y) continue;
-				const int y0 = p0y < p1y ? p0y : p1y;
-				const int y1 = p0y > p1y ? p0y : p1y;
-				assert(y0 <= y1);
-				if (!(y0 <= suby && suby < y1)) continue;
-				if (p1y < p0y) {
-					// left edge; increment accumulator if
-					// point lies on or after edge
-					if (subx >= lineseg_eval_x_at_y(p1x, p1y, p0x, p0y, suby)) acc++;
-				} else if (p1y > p0y) {
-					// right edge; decrement accumulator if
-					// point lies after edge
-					if (subx > lineseg_eval_x_at_y(p0x, p0y, p1x, p1y, suby)) acc--;
-				} else {
-					assert(!"unreachable");
-				}
-			}
-			const int v = acc>0;
-			PUSH(v);
-			pc += n;
-		}	break;
-		case RZROP_UNION: {
-			const int b = POP();
-			const int a = POP();
-			PUSH(a || b);
-		}	break;
-		case RZROP_DIFFERENCE: {
-			const int b = POP();
-			const int a = POP();
-			PUSH(a && !b);
-		}	break;
-		case RZROP_INTERSECTION: {
-			const int b = POP();
-			const int a = POP();
-			PUSH(a && b);
-		}	break;
-		default: assert(!"unhandled case");
-		}
-	}
-	const int r = POP();
-	#undef POP
-	#undef PUSH
-	return r;
-}
-
-void rzr_subpixel_queries(struct rzr* rzr, int n, int* subpixel_coord_pairs, int* out_inside)
-{
-	int* p = out_inside;
-	for (int i = 0; i < n; i++) {
-		const int subx = subpixel_coord_pairs[i<<1];
-		const int suby = subpixel_coord_pairs[(i<<1)+1];
-		const int is_inside = rzr_subpixel_query(rzr, subx, suby);
-		if (p != NULL) *(p++) = is_inside;
-	}
-}
-
-int rzr_query(struct rzr* rzr, int x, int y)
-{
-	return rzr_subpixel_query(rzr, x*rzr->supersampling_factor, y*rzr->supersampling_factor);
-}
-
-void rzr_queries(struct rzr* rzr, int n, int* coord_pairs, int* out_inside)
-{
-	int* p = out_inside;
-	for (int i = 0; i < n; i++) {
-		const int x = coord_pairs[i<<1];
-		const int y = coord_pairs[(i<<1)+1];
-		const int is_inside = rzr_query(rzr, x, y);
-		if (p != NULL) *(p++) = is_inside;
-	}
 }
 
 
@@ -1981,6 +2109,17 @@ static struct rzr* getrz(float pixels_per_unit, int width, int height, int super
 	return &rzr;
 }
 
+static struct rzr* getrz3x3(float pixels_per_unit, int width, int height, int supersampling_factor)
+{
+	static struct rzr_tx tx[256];
+	static struct rzr_op prg[256];
+	static struct rzr rzr;
+	const int widths[]  = {width,  -1, width,  0};
+	const int heights[] = {height, -1, height, 0};
+	rzr_init_MxN(&rzr, ARRAY_LENGTH(tx), tx, ARRAY_LENGTH(prg), prg, widths, heights, pixels_per_unit, supersampling_factor);
+	return &rzr;
+}
+
 static void test_point_queries(void)
 {
 	const int width = 512;
@@ -2068,7 +2207,7 @@ static void test_subrender(void)
 			{.n = n_l1s, .spans = l1s}, \
 			{.n = n_l2s, .spans = l2s}, \
 		}; \
-		subrender(pixels, width, 3, sub_scanlines); \
+		subrender(pixels, 1, &width, 3, sub_scanlines); \
 		if (memcmp(pixels, expected_pixels, width) != 0) { \
 			fprintf(stderr, "in subrender() of:\n%s\n%s\n%s\nexpected pixels:\n%s\n", str_l0, str_l1, str_l2, str_expected_pixels); \
 			for (int i0 = 0; i0 < width; i0++) fprintf(stderr, "%.2x.", expected_pixels[i0]); \
@@ -2112,6 +2251,7 @@ static void test_subrender(void)
 
 static void bitmap_ascii_dump(int width, int height, uint8_t* pixels)
 {
+	printf("\n");
 	for (int y = 0; y < height; y++) {
 		{
 			uint8_t* p = pixels + y*width;
@@ -2151,6 +2291,64 @@ static void test_rzr(void)
 	bitmap_ascii_dump(width, height, pixels);
 }
 
+static void test_3x3(void)
+{
+	const int tile_size = 5;
+	struct rzr* rzr = getrz3x3(tile_size, tile_size, tile_size, 16);
+	Circle(1.0f);
+	Circle(0.45f);
+	Difference();
+	uint8_t scratch[1<<18];
+	const size_t scratch_sz = sizeof(scratch);
+	uint8_t pixels[rzr->bitmap_width * rzr->bitmap_height];
+	memset(pixels, 0xfe, sizeof pixels);
+	rzr_render(rzr, scratch_sz, scratch, rzr->bitmap_width, pixels);
+
+	const char* msg = "(-: STREEEETCH :-)";
+
+	const int nch = strlen(msg);
+	const int inner_width = (nch+1)/2 + 2;
+	const int inner_height = 3;
+	const int total_width = tile_size + inner_width + tile_size;
+	const int total_height = tile_size + inner_height + tile_size;
+
+	#if 0
+	bitmap_ascii_dump(rzr->bitmap_width, rzr->bitmap_height, pixels);
+	#endif
+
+	//const int msg_x0 = (total_width/2 - (nch+1)/2)*2;
+	const int msg_x0 = total_width/2 - nch/4;
+	const int msg_y = total_height/2;
+	printf("\n");
+	for (int y = 0; y < total_height; y++) {
+		for (int x = 0; x < total_width; x++) {
+			//uint8_t* p = pixels + y*width;
+			const int qx =
+				  x < tile_size               ? x
+				: x < (total_width-tile_size) ? tile_size
+				: x - total_width + tile_size*2+1;
+			const int qy =
+				  y < tile_size                ? y
+				: y < (total_height-tile_size) ? tile_size
+				: y - total_height + tile_size*2+1;
+			assert(0 <= qx && qx < rzr->bitmap_width);
+			assert(0 <= qy && qy < rzr->bitmap_height);
+			if (y == msg_y && (msg_x0 <= x && x < (msg_x0+(nch+1)/2))) {
+				for (int i = 0; i < 2; i++) {
+					const int ii = 2*(x-msg_x0)+i;
+					printf("%c", ii < nch ? msg[ii] : ' ');
+				}
+			} else {
+				uint8_t* p = pixels + qx + qy*rzr->bitmap_width;
+				const int v = *p;
+				const char c = " .:ioVM@"[v>>5];
+				printf("%c%c", c, c);
+			}
+		}
+		printf("\n");
+	}
+}
+
 int main(int argc, char** argv)
 {
 	test_spanlist_parser_and_unparser();
@@ -2162,6 +2360,7 @@ int main(int argc, char** argv)
 	test_point_queries();
 	test_subrender();
 	test_rzr();
+	test_3x3();
 	printf("TESTS: OK\n");
 	return EXIT_SUCCESS;
 }
@@ -2324,8 +2523,8 @@ static struct rzr* begin_render(int width, int height, float pixels_per_unit, in
 
 static void end_render(const char* path)
 {
-	const int w = g.rzr.width;
-	const int h = g.rzr.height;
+	const int w = g.rzr.bitmap_width;
+	const int h = g.rzr.bitmap_height;
 	uint8_t* pixels = malloc(w*h);
 	const double t0 = tim();
 	rzr_render(&g.rzr, SCRATCH_SZ, g.scratch, w, pixels);
