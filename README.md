@@ -1,5 +1,5 @@
 ## Features
- - Small codebase (<4ksloc), easy to drop-in: just copy `rzr.c` and `rzr.h` into your project.
+ - Small codebase, easy to drop-in: just copy `rzr.c` and `rzr.h` into your project, public domain/MIT.
  - Monochrome-only, 8-bit grayscale output
  - Stack-based drawing:
    - Shapes (pushes 1): circles, polygons (concave) (+helpers).
