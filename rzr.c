@@ -2679,8 +2679,8 @@ int main(int argc, char** argv)
 				if ((i&1) == 0 && i >= 2) Union();
 				if ((i&1) == 1) Difference();
 			}
-			Star(12, 0.8f, 0.5f);
-			Difference();
+			Star(40, 0.9f, 0.4f);
+			Intersection();
 			end_tile();
 		}
 		{
