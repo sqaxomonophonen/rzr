@@ -1,12 +1,13 @@
 ## Features
  - Small codebase, easy to drop-in: just copy `rzr.c` and `rzr.h` into your project, public domain/MIT.
- - Monochrome-only, 8-bit grayscale output
+ - Monochrome-only, 8-bit grayscale output.
  - Stack-based drawing:
    - Shapes (pushes 1): circles, polygons (concave) (+helpers).
    - Boolean operations (pops 2, pushes 1): union, difference, intersection.
- - Transforms: translate, rotate, scale
- - Point queries" determines if a point lies inside or outside of your shape (useful for GUI mouseover stuff).
- - "MxN rendering": useful for stretched renders, like UI frames, buttons, etc.
+ - Transforms: translate, rotate, scale.
+ - Point queries: determines if a point lies inside or outside of your shape (useful for GUI mouseover stuff).
+ - "MxN rendering": useful when you want to "stretch" the center of a render, like for UI frames, buttons, etc.
+   (There's an example in the unit test, and it's explained better in `rzr.h`).
  - Reasonably fast? Merges subpixel-scanline span lists into `memset()`'able pixel spans.
  - Depends on libc/libm, but doesn't `malloc()`; you provide the memory it uses.
 
