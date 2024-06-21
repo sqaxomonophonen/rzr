@@ -240,6 +240,19 @@ static inline void rzr_tx_translate(struct rzr* rzr, float x, float y)
 	tx->origin_y += (x*tx->basis0_y + y*tx->basis0_x);
 }
 
+static inline void rzr_invert_tx(struct rzr_tx* tx)
+{
+	const float I = 1.0f / (tx->basis0_x*tx->basis0_x + tx->basis0_y*tx->basis0_y);
+	const float bx =  I * tx->basis0_x;
+	const float by = -I * tx->basis0_y;
+	const float ox = I * ((-tx->basis0_y * tx->origin_y) - (tx->basis0_x * tx->origin_x));
+	const float oy = I * (( tx->basis0_y * tx->origin_x) - (tx->basis0_x * tx->origin_y));
+	tx->basis0_x = bx;
+	tx->basis0_y = by;
+	tx->origin_x = ox;
+	tx->origin_y = oy;
+}
+
 static inline float rzr__deg2rad(float deg) { return deg * 0.017453292519943295f; }
 
 static inline void rzr_tx_rotate(struct rzr* rzr, float degrees)
@@ -319,13 +332,21 @@ static inline void rzr_end_poly(struct rzr* rzr)
 	rzr->in_poly = 0;
 }
 
+static inline void rzr_map_point(struct rzr_tx* tx, float x, float y, float* out_u, float* out_v)
+{
+	if (out_u) *out_u = tx->origin_x + x*tx->basis0_x - y*tx->basis0_y;
+	if (out_v) *out_v = tx->origin_y + x*tx->basis0_y + y*tx->basis0_x;
+}
+
 static inline void rzr_vertex(struct rzr* rzr, float x, float y)
 {
 	assert(rzr->in_poly);
 	struct rzr_op* op = rzr_op(rzr, RZROP_VERTEX);
 	struct rzr_tx* tx = rzr_get_current_tx(rzr);
-	op->vertex.x = rzr_float_to_int(tx->origin_x + x*tx->basis0_x - y*tx->basis0_y);
-	op->vertex.y = rzr_float_to_int(tx->origin_y + x*tx->basis0_y + y*tx->basis0_x);
+	float u,v;
+	rzr_map_point(tx, x, y, &u, &v);
+	op->vertex.x = rzr_float_to_int(u);
+	op->vertex.y = rzr_float_to_int(v);
 }
 
 static inline void rzr_star(struct rzr* rzr, int n, float outer_radius, float inner_radius)
@@ -352,6 +373,17 @@ static inline void rzr_pattern(struct rzr* rzr, float* ws)
 	assert((n >= 2) && "empty pattern");
 	assert(ww > 0.0f);
 
+	struct rzr_tx tx = *rzr_get_current_tx(rzr);
+	struct rzr_tx invtx = tx;
+	rzr_invert_tx(&invtx);
+	float x0,y0,xu,yu,xv,yv;
+	const int ss = rzr_get_supersampling_factor(rzr);
+	rzr_map_point(&invtx, 0, 0, &x0, &y0);
+	rzr_map_point(&invtx, rzr->virtual_width*ss,  0, &xu, &yu);
+	rzr_map_point(&invtx, 0, rzr->virtual_height*ss, &xv, &yv);
+	//printf("n=%f,%f u=%f,%f v=%f,%f\n", x0, y0, xu,yu, xv,yv);
+	assert(!"TODO pattern");
+	#if 0
 	float x = 0.0f;
 	p = ws;
 	int ns = 0;
@@ -370,6 +402,7 @@ static inline void rzr_pattern(struct rzr* rzr, float* ws)
 		}
 		x += w;
 	}
+	#endif
 }
 
 static inline void rzr_line(struct rzr* rzr, float width)
