@@ -1,15 +1,19 @@
 #ifndef RZR_H
 
 /*
-TODO:
- - allow out-of-memory errors without crashing?
- - improve robustness of rzr__xline()? it powers "Split", "Line" and "Pattern".
+TODO/FIXME:
+ - Allow out-of-memory errors without crashing?
+ - Improve robustness of rzr__xline()? It powers "Split", "Line" and "Pattern".
    it probably has numerical problems with near-vertical lines (prevcx~=cx),
    and lines crossing close to corners
-FIXME:
  - A circle precalcs/stores a number of values equal to its subpixel radius
    regardless of image size.
  - There's something fishy with the capsule zoo demo: weird extra pixels?
+ - `post_order_stack` and `xops` could use proper memory management; see
+   comments.
+ - The polygon xspan sorting/finding is fragile; see comment; I've also seen
+   `assert(xe->side == (i2&1));` fail in the wild.
+ - rzr_rounded_box() doesn't handle when radius is larger than box.
 */
 
 #include <assert.h>
@@ -585,22 +589,23 @@ static inline void rzr_arc(struct rzr* rzr, float aperture_degrees, float radius
 	} else {
 		rzr_union(rzr);
 	}
-	rzr_circle(rzr, radius);
-	rzr_circle(rzr, radius-width);
+	const float wh = 0.5f*width;
+	rzr_circle(rzr, radius+wh);
+	rzr_circle(rzr, radius-wh);
 	rzr_difference(rzr);
 	rzr_intersection(rzr);
 
 	rzr_tx_save(rzr);
 	rzr_tx_rotate(rzr, -aperture_degrees);
-	rzr_tx_translate(rzr, 0, -radius+width/2);
-	rzr_circle(rzr, width/2);
+	rzr_tx_translate(rzr, 0, -radius);
+	rzr_circle(rzr, wh);
 	rzr_union(rzr);
 	rzr_tx_restore(rzr);
 
 	rzr_tx_save(rzr);
 	rzr_tx_rotate(rzr, aperture_degrees);
-	rzr_tx_translate(rzr, 0, -radius+width/2);
-	rzr_circle(rzr, width/2);
+	rzr_tx_translate(rzr, 0, -radius);
+	rzr_circle(rzr, wh);
 	rzr_union(rzr);
 	rzr_tx_restore(rzr);
 }
@@ -644,7 +649,7 @@ static inline void rzr_segment(struct rzr* rzr, float x0, float y0, float x1, fl
 	rzr_capsule(rzr, x0, y0, x1, y1, r, r);
 }
 
-static inline void rzr_isosceles_triangle(struct rzr* rzr, float w, float h)
+static inline void rzr_triangle(struct rzr* rzr, float w, float h)
 {
 	rzr_begin_poly(rzr);
 	rzr_vertex(rzr,  0, 0);
@@ -653,10 +658,10 @@ static inline void rzr_isosceles_triangle(struct rzr* rzr, float w, float h)
 	rzr_end_poly(rzr);
 }
 
-static inline void rzr_isosceles_trapezoid(struct rzr* rzr, float r1, float r2, float h)
+static inline void rzr_trapezoid(struct rzr* rzr, float r1, float r2, float h)
 {
 	if (r1 <= 0.0f) {
-		rzr_isosceles_triangle(rzr, r2, h);
+		rzr_triangle(rzr, r2, h);
 		return;
 	}
 	rzr_begin_poly(rzr);
@@ -713,8 +718,8 @@ int  rzr_query(struct rzr*, int x, int y);
 #define RoundedBox(w,h,r)            rzr_rounded_box(RZR_INSTANCE,w,h,r)
 #define Segment(x0,y0,x1,y1,r)       rzr_segment(RZR_INSTANCE,x0,y0,x1,y1,r)
 #define Capsule(x0,y0,x1,y1,r0,r1)   rzr_capsule(RZR_INSTANCE,x0,y0,x1,y1,r0,r1)
-#define IsoscelesTriangle(w,h)       rzr_isosceles_triangle(RZR_INSTANCE,w,h)
-#define IsoscelesTrapezoid(r1,r2,h)  rzr_isosceles_trapezoid(RZR_INSTANCE,r1,r2,h)
+#define Triangle(w,h)                rzr_triangle(RZR_INSTANCE,w,h)
+#define Trapezoid(r1,r2,h)           rzr_trapezoid(RZR_INSTANCE,r1,r2,h)
 
 //#define Simplify(n,e)                              rzr_simplify(RZR_INSTANCE,n,e)
 //#define CubicBezier(x0,y0,c0x,c0y,c1x,c1y,x1,y1)   rzr_cubic_bezier(RZR_INSTANCE,x0,y0,c0x,c0y,c1x,c1y,x1,y1)

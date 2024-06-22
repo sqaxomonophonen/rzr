@@ -2824,11 +2824,11 @@ int main(int argc, char** argv)
 			Save();
 			Translate(-0.1,0.2);
 			Rotate(33);
-			IsoscelesTriangle(0.2, 0.5);
+			Triangle(0.2, 0.5);
 			Restore();
 			Save();
 			Rotate(160);
-			IsoscelesTrapezoid(0.1,0.4,0.8);
+			Trapezoid(0.1,0.4,0.8);
 			Union();
 			Restore();
 			Save();
@@ -2859,12 +2859,12 @@ int main(int argc, char** argv)
 
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
-			Arc(120.0, 0.95, 0.2);
-			Arc(120.0, 0.92, 0.14);
+			Arc(120.0, 0.85, 0.2);
+			Arc(120.0, 0.85, 0.14);
 			Difference();
 			Save();
 			Rotate(45);
-			Arc(70.0, 0.7, 0.3);
+			Arc(70.0, 0.55, 0.3);
 			Restore();
 			Union();
 			end_tile();
