@@ -581,39 +581,43 @@ int rzr_subpixel_query(struct rzr* rzr, int subx, int suby)
 			PUSH(v);
 		}	break;
 		case RZROP_POLY: {
-			const int n = op->poly.n_vertices;
-			int iprev = n-1;
-			int acc = 0;
-			for (int i = 0; i < n; i++) {
-				struct rzr_op* voprev = &rzr->prg[pc+1+iprev];
-				iprev = i;
-				struct rzr_op* vop = &rzr->prg[pc+1+i];
-				assert(voprev->code == RZROP_VERTEX);
-				assert(vop->code == RZROP_VERTEX);
-				const int p0x = voprev->vertex.x;
-				const int p0y = voprev->vertex.y;
-				const int p1x = vop->vertex.x;
-				const int p1y = vop->vertex.y;
-				if (p0y == p1y) continue;
-				const int y0 = p0y < p1y ? p0y : p1y;
-				const int y1 = p0y > p1y ? p0y : p1y;
-				assert(y0 <= y1);
-				if (!(y0 <= suby && suby < y1)) continue;
-				if (p1y < p0y) {
-					// left edge; increment accumulator if
-					// point lies on or after edge
-					if (subx >= lineseg_eval_x_at_y(p1x, p1y, p0x, p0y, suby)) acc++;
-				} else if (p1y > p0y) {
-					// right edge; decrement accumulator if
-					// point lies after edge
-					if (subx > lineseg_eval_x_at_y(p0x, p0y, p1x, p1y, suby)) acc--;
-				} else {
-					assert(!"unreachable");
+			if (!op->poly.is_valid) {
+				PUSH(0);
+			} else {
+				const int n = op->poly.n_vertices;
+				int iprev = n-1;
+				int acc = 0;
+				for (int i = 0; i < n; i++) {
+					struct rzr_op* voprev = &rzr->prg[pc+1+iprev];
+					iprev = i;
+					struct rzr_op* vop = &rzr->prg[pc+1+i];
+					assert(voprev->code == RZROP_VERTEX);
+					assert(vop->code == RZROP_VERTEX);
+					const int p0x = voprev->vertex.x;
+					const int p0y = voprev->vertex.y;
+					const int p1x = vop->vertex.x;
+					const int p1y = vop->vertex.y;
+					if (p0y == p1y) continue;
+					const int y0 = p0y < p1y ? p0y : p1y;
+					const int y1 = p0y > p1y ? p0y : p1y;
+					assert(y0 <= y1);
+					if (!(y0 <= suby && suby < y1)) continue;
+					if (p1y < p0y) {
+						// left edge; increment accumulator if
+						// point lies on or after edge
+						if (subx >= lineseg_eval_x_at_y(p1x, p1y, p0x, p0y, suby)) acc++;
+					} else if (p1y > p0y) {
+						// right edge; decrement accumulator if
+						// point lies after edge
+						if (subx > lineseg_eval_x_at_y(p0x, p0y, p1x, p1y, suby)) acc--;
+					} else {
+						assert(!"unreachable");
+					}
 				}
+				const int v = acc>0;
+				PUSH(v);
+				pc += n;
 			}
-			const int v = acc>0;
-			PUSH(v);
-			pc += n;
 		}	break;
 		case RZROP_UNION: {
 			const int b = POP();
@@ -710,7 +714,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		}	break;
 
 		case RZROP_SWAP: {
-			stack_delta = 0;
 		}	break;
 
 		case RZROP_ZERO: {
@@ -732,16 +735,18 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		}	break;
 
 		case RZROP_POLY: {
-			resource_index = n_polys++;
-			yspan_list_index = n_yspan_lists++;
-			stack_delta = 1; // 1 PUSH
-			assert(n_remaining_vertices == 0);
 			const int n = op->poly.n_vertices;
-			assert(n >= 3);
+			assert(n_remaining_vertices == 0);
 			n_remaining_vertices = n;
-			max_poly_yspan_count += (n-1);
-			n_vertices_total += n;
-			if (n > max_n_vertices_in_poly) max_n_vertices_in_poly = n;
+			if (op->poly.is_valid) {
+				resource_index = n_polys++;
+				yspan_list_index = n_yspan_lists++;
+				stack_delta = 1; // 1 PUSH
+				assert(n >= 3);
+				max_poly_yspan_count += (n-1);
+				n_vertices_total += n;
+				if (n > max_n_vertices_in_poly) max_n_vertices_in_poly = n;
+			}
 		}	break;
 
 		case RZROP_VERTEX: {
@@ -871,40 +876,40 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 		case RZROP_POLY: {
 			PUSH(pc);
-
-			struct poly* poly = &polys[ri];
-			poly->yspan_offset = poly_yspan_cursor;
-
 			const int n = op->poly.n_vertices;
-			assert((pc+n+1) <= n_ops);
-			poly->vertex_offset = vertex_cursor;
-			poly->vertex_count = n;
-			for (int i = 0; i < n; i++) {
-				struct rzr_op* vop = &rzr->prg[pc+i+1];
-				assert(vop->code == RZROP_VERTEX);
-				vertex_y_stor[i] = vop->vertex.y;
-				assert(vertex_cursor < n_vertices_total);
-				struct vertex* v = &vertex_stor[vertex_cursor++];
-				v->x = vop->vertex.x;
-				v->y = vop->vertex.y;
-			}
-			qsort(vertex_y_stor, n, sizeof(vertex_y_stor[0]), int_compar);
-			int n_spans = 0;
-			NEW_YSPAN_LIST();
-			for (int i = 1; i < n; i++) {
-				const int y0 = vertex_y_stor[i-1];
-				const int y1 = vertex_y_stor[i];
-				if (y1 > y0) {
-					n_spans++;
-					PUSH_YSPAN(y0, y1-1, NIL, NIL);
-					assert(poly_yspan_cursor < max_poly_yspan_count);
-					struct poly_yspan* poly_yspan = &poly_yspans[poly_yspan_cursor++];
-					poly_yspan->y0 = y0;
-					poly_yspan->y1 = y1-1;
-				}
-			}
-			poly->yspan_count = n_spans;
+			if (op->poly.is_valid) {
+				struct poly* poly = &polys[ri];
+				poly->yspan_offset = poly_yspan_cursor;
 
+				assert((pc+n+1) <= n_ops);
+				poly->vertex_offset = vertex_cursor;
+				poly->vertex_count = n;
+				for (int i = 0; i < n; i++) {
+					struct rzr_op* vop = &rzr->prg[pc+i+1];
+					assert(vop->code == RZROP_VERTEX);
+					vertex_y_stor[i] = vop->vertex.y;
+					assert(vertex_cursor < n_vertices_total);
+					struct vertex* v = &vertex_stor[vertex_cursor++];
+					v->x = vop->vertex.x;
+					v->y = vop->vertex.y;
+				}
+				qsort(vertex_y_stor, n, sizeof(vertex_y_stor[0]), int_compar);
+				int n_spans = 0;
+				NEW_YSPAN_LIST();
+				for (int i = 1; i < n; i++) {
+					const int y0 = vertex_y_stor[i-1];
+					const int y1 = vertex_y_stor[i];
+					if (y1 > y0) {
+						n_spans++;
+						PUSH_YSPAN(y0, y1-1, NIL, NIL);
+						assert(poly_yspan_cursor < max_poly_yspan_count);
+						struct poly_yspan* poly_yspan = &poly_yspans[poly_yspan_cursor++];
+						poly_yspan->y0 = y0;
+						poly_yspan->y1 = y1-1;
+					}
+				}
+				poly->yspan_count = n_spans;
+			}
 			pc += n; // skip RZROP_VERTEX's
 		}	break;
 
@@ -1396,25 +1401,26 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 				int passthru_binop=0, binop=0;
 
-				#define SHAPE_XOP() \
+				#define SHAPE_XOP(OPCODE) \
 					assert(v.ysi_a == NIL); \
 					assert(v.ysi_b == NIL); \
 					assert(n_xop < xop_cap); \
 					xop = &xops[n_xop++]; \
-					memset(xop, 0, sizeof *xop);
+					memset(xop, 0, sizeof *xop); \
+					xop->opcode = OPCODE;
 
 				switch (op->code) {
 
 				case RZROP_ZERO: {
-					SHAPE_XOP();
+					SHAPE_XOP(op->code);
 				}	break;
 
 				case RZROP_ONE: {
-					SHAPE_XOP();
+					SHAPE_XOP(op->code);
 				}	break;
 
 				case RZROP_CIRCLE: {
-					SHAPE_XOP();
+					SHAPE_XOP(op->code);
 					xop->circle.cx = op->circle.cx;
 					xop->circle.cy = op->circle.cy;
 					xop->circle.radius = op->circle.radius;
@@ -1422,25 +1428,29 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				}	break;
 
 				case RZROP_POLY: {
-					SHAPE_XOP();
-					struct poly* poly = &polys[pc2ri[pc]];
-					const int n = poly->yspan_count;
-					const int yspan_offset = poly->yspan_offset;
-					struct poly_yspan* yp = &poly_yspans[yspan_offset];
-					int i0=-1, i1=-1;
-					for (int i = 0; i < n; i++, yp++) {
-						const int o = ispans_overlap(root_y0, root_y1, yp->y0, yp->y1);
-						if (o) {
-							if (i0 == -1) i0 = i;
-							i1 = i;
-						} else if (!o && i0 >= 0) {
-							break;
+					if (!op->poly.is_valid) {
+						SHAPE_XOP(RZROP_ZERO);
+					} else {
+						SHAPE_XOP(op->code);
+						struct poly* poly = &polys[pc2ri[pc]];
+						const int n = poly->yspan_count;
+						const int yspan_offset = poly->yspan_offset;
+						struct poly_yspan* yp = &poly_yspans[yspan_offset];
+						int i0=-1, i1=-1;
+						for (int i = 0; i < n; i++, yp++) {
+							const int o = ispans_overlap(root_y0, root_y1, yp->y0, yp->y1);
+							if (o) {
+								if (i0 == -1) i0 = i;
+								i1 = i;
+							} else if (!o && i0 >= 0) {
+								break;
+							}
 						}
+						assert(i0 >= 0);
+						assert(i1 >= 0);
+						xop->poly.yspans_i0 = yspan_offset + i0;
+						xop->poly.yspans_i1 = yspan_offset + i1;
 					}
-					assert(i0 >= 0);
-					assert(i1 >= 0);
-					xop->poly.yspans_i0 = yspan_offset + i0;
-					xop->poly.yspans_i1 = yspan_offset + i1;
 				}	break;
 
 				case RZROP_VERTEX: {
@@ -1479,15 +1489,12 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					assert(n_xop < xop_cap);
 					xop = &xops[n_xop++];
 					memset(xop, 0, sizeof *xop);
+					xop->opcode = op->code;
 					assert(n_xop >= 2);
 				} else if (passthru_binop) {
 					assert(xop == NULL);
 				} else {
 					assert(xop != NULL);
-				}
-
-				if (xop != NULL) {
-					xop->opcode = op->code;
 				}
 
 				cursor = -1;
@@ -1607,6 +1614,11 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					const int nr = spanlist_binop(xop->opcode, SCRATCH_AT(), SCRATCH_TAIL_REMAINING(), ra.count, aa, rb.count, bb);
 					SCRATCH_TAIL_YANK(nr);
 				}	break;
+
+				case RZROP_PICK: assert(!"stackops (PICK) doesn't belong in xops");
+				case RZROP_SWAP: assert(!"stackops (SWAP) doesn't belong in xops");
+				case RZROP_DROP: assert(!"stackops (DROP) doesn't belong in xops");
+				case RZROP_VERTEX: assert(!"vertex op leaked through into xops?!");
 
 				default: assert(!"unhandled case");
 				}

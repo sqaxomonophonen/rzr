@@ -13,6 +13,7 @@ FIXME:
 */
 
 #include <assert.h>
+#include <stdint.h>
 #include <math.h>
 
 struct rzr_tx {
@@ -28,7 +29,7 @@ static inline float rzr_tx_get_scale(struct rzr_tx* tx)
 }
 
 enum rzr_op_code {
-	RZROP_PICK = 0,
+	RZROP_PICK = 1,
 	RZROP_SWAP,
 	RZROP_DROP,
 
@@ -50,10 +51,10 @@ enum rzr_op_code {
 struct rzr_op {
 	enum rzr_op_code code;
 	union {
-		struct { int stack_index;  } pick;
-		struct { int cx,cy,radius; } circle;
-		struct { int n_vertices;   } poly;
-		struct { int x,y;          } vertex;
+		struct { int stack_index;          } pick;
+		struct { int cx,cy,radius;         } circle;
+		struct { int n_vertices, is_valid; } poly;
+		struct { int x,y;                  } vertex;
 	};
 };
 
@@ -332,6 +333,7 @@ static inline void rzr_begin_poly(struct rzr* rzr)
 	rzr->poly_op_index = rzr->prg_length;
 	struct rzr_op* op = rzr_op(rzr, RZROP_POLY);
 	op->poly.n_vertices = -1;
+	op->poly.is_valid = 0;
 	rzr->in_poly = 1;
 }
 
@@ -340,7 +342,20 @@ static inline void rzr_end_poly(struct rzr* rzr)
 	assert(rzr->in_poly);
 	const int n_vertices = rzr->prg_length - (rzr->poly_op_index + 1);
 	assert((n_vertices >= 3) && "a polygon must have at least 3 vertices");
-	rzr->prg[rzr->poly_op_index].poly.n_vertices = n_vertices;
+	struct rzr_op* op = &rzr->prg[rzr->poly_op_index];
+	op->poly.n_vertices = n_vertices;
+
+	int iprev = n_vertices-1;
+	int64_t area = 0;
+	for (int i = 0; i < n_vertices; i++) {
+		struct rzr_op* op = &rzr->prg[rzr->poly_op_index+1+i];
+		struct rzr_op* prevop = &rzr->prg[rzr->poly_op_index+1+iprev];
+		assert(op->code == RZROP_VERTEX);
+		assert(prevop->code == RZROP_VERTEX);
+		iprev = i;
+		area += (op->vertex.x - prevop->vertex.x) * (op->vertex.y + prevop->vertex.y);
+	}
+	op->poly.is_valid = area < 0;
 	rzr->in_poly = 0;
 }
 
