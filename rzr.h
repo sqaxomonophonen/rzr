@@ -366,12 +366,6 @@ static inline void rzr_star(struct rzr* rzr, int n, float outer_radius, float in
 	rzr_end_poly(rzr);
 }
 
-
-#if 0
-static inline float pat1(float x) { return x - floorf(x); }
-static inline float patw(float x, float w, float wi) { return pat1(x*wi)*w; }
-#endif
-
 struct rzr__xlines {
 	struct rzr* rzr;
 	float  corner_coords[8];
@@ -448,46 +442,39 @@ static int rzr__xline(struct rzr__xlines* rl, float x0, float x1)
 
 static inline void rzr_pattern(struct rzr* rzr, float* ws)
 {
-	int n=0;
+	int nw=0;
 	float totw = 0.0f;
 	float* p = ws;
-	while (*p > 0) { totw+=*p ; p++; n++; }
-	assert(((n&1) == 0) && "ws count must be even");
-	assert((n >= 2) && "empty pattern");
+	while (*p > 0) { totw+=*p ; p++; nw++; }
+	assert(((nw&1) == 0) && "ws count must be even");
+	assert((nw >= 2) && "empty pattern");
 	assert(totw > 0.0f);
+	const float itotw = 1.0f/totw;
 
-	struct rzr_tx tx = *rzr_get_current_tx(rzr);
-	struct rzr_tx invtx = tx;
-	rzr_invert_tx(&invtx);
-	float x0,y0,xu,yu,xv,yv;
-	const int ss = rzr_get_supersampling_factor(rzr);
-	rzr_map_point(&invtx, 0, 0, &x0, &y0);
-	rzr_map_point(&invtx, rzr->virtual_width*ss,  0, &xu, &yu);
-	rzr_map_point(&invtx, 0, rzr->virtual_height*ss, &xv, &yv);
-
-	printf("n=%f,%f u=%f,%f v=%f,%f\n", x0, y0, xu,yu, xv,yv);
-	assert(!"TODO pattern");
-
-	#if 0
-	float x = 0.0f;
-	p = ws;
-	int ns = 0;
-	const float y0 = -1.0f;
-	const float y1 =  1.0f;
-	for (int i = 0; i < n; i++) {
-		const float w = *(p++);
-		if ((i&1) == 0) {
-			rzr_begin_poly(rzr);
-			rzr_vertex(rzr, x   , y0);
-			rzr_vertex(rzr, x+w , y0);
-			rzr_vertex(rzr, x+w , y1);
-			rzr_vertex(rzr, x   , y1);
-			rzr_end_poly(rzr);
-			if (ns++) rzr_union(rzr);
+	struct rzr__xlines rl;
+	rzr__xlines_init(&rl, rzr);
+	float i0 = floorf(rl.xmin * itotw);
+	int ne = 0;
+	for (;;) {
+		const float x0 = i0*totw;
+		if (x0 > rl.xmax) break;
+		float px0 = x0;
+		for (int i = 0; i < nw; i++) {
+			float px1 = px0 + ws[i];
+			if (((i&1)==0) && rzr__xline(&rl, px0, px1)) {
+				if (ne > 0) rzr_union(rzr);
+				ne++;
+			}
+			px0 = px1;
 		}
-		x += w;
+		const int i0p = i0;
+		i0 += 1.0f;
+		if (!(i0 > i0p)) break; // paranoia
 	}
-	#endif
+	if (ne == 0) {
+		assert(!"TODO ZERO OP");
+		rzr_zero(rzr);
+	}
 }
 
 
@@ -559,12 +546,65 @@ static inline void rzr_rounded_box(struct rzr* rzr, float width, float height, f
 
 static inline void rzr_arc(struct rzr* rzr, float aperture_degrees, float radius, float width)
 {
+	if (aperture_degrees < 0.0f) aperture_degrees = 0.0f;
+	if (aperture_degrees >= 180.0f) aperture_degrees = 180.0f;
+	rzr_tx_save(rzr);
+	rzr_tx_rotate(rzr, -(aperture_degrees));
+	rzr_split(rzr);
+	rzr_tx_restore(rzr);
+	rzr_tx_save(rzr);
+	rzr_tx_rotate(rzr, (aperture_degrees)+180.0f);
+	rzr_split(rzr);
+	rzr_tx_restore(rzr);
+	if (aperture_degrees < 90.0f) {
+		rzr_intersection(rzr);
+	} else {
+		rzr_union(rzr);
+	}
+	rzr_circle(rzr, radius);
+	rzr_circle(rzr, radius-width);
+	rzr_difference(rzr);
+	rzr_intersection(rzr);
+
+	rzr_tx_save(rzr);
+	rzr_tx_rotate(rzr, -aperture_degrees);
+	rzr_tx_translate(rzr, 0, -radius+width/2);
+	rzr_circle(rzr, width/2);
+	rzr_union(rzr);
+	rzr_tx_restore(rzr);
+
+	rzr_tx_save(rzr);
+	rzr_tx_rotate(rzr, aperture_degrees);
+	rzr_tx_translate(rzr, 0, -radius+width/2);
+	rzr_circle(rzr, width/2);
+	rzr_union(rzr);
+	rzr_tx_restore(rzr);
+}
+
+static inline void rzr_capsule(struct rzr* rzr, float x0, float y0, float x1, float y1, float r0, float r1)
+{
+	#if 0
+	const float dx = x1-x0;
+	const float dy = y1-y0;
+	const float a = atan2(dy, dx);
+	const float b = asinf((r1-r0) / sqrtf(dx*dx + dy*dy));
+	rzr_begin_poly(rzr);
+	const float s0 = sinf(a+b);
+	const float s1 = sinf(a-b);
+	const float c0 = cosf(a+b);
+	const float c1 = cosf(a-b);
+	rzr_vertex(rzr, x0 + r0*s0, y0 + r0*c0);
+	rzr_vertex(rzr, x1 + r1*s0, y1 + r1*c0);
+	rzr_vertex(rzr, x1 - r1*s1, y1 - r1*c1);
+	rzr_vertex(rzr, x0 - r0*s1, y0 - r0*c1);
+	rzr_end_poly(rzr);
+	#endif
 	assert(!"TODO");
 }
 
 static inline void rzr_segment(struct rzr* rzr, float x0, float y0, float x1, float y1, float r)
 {
-	assert(!"TODO");
+	rzr_capsule(rzr, x0, y0, x1, y1, r, r);
 }
 
 static inline void rzr_isosceles_triangle(struct rzr* rzr, float w, float h)
@@ -632,6 +672,7 @@ int  rzr_query(struct rzr*, int x, int y);
 #define Box(w,h)                     rzr_box(RZR_INSTANCE,w,h)
 #define RoundedBox(w,h,r)            rzr_rounded_box(RZR_INSTANCE,w,h,r)
 #define Segment(x0,y0,x1,y1,r)       rzr_segment(RZR_INSTANCE,x0,y0,x1,y1,r)
+#define Capsule(x0,y0,x1,y1,r0,r1)   rzr_capsule(RZR_INSTANCE,x0,y0,x1,y1,r0,r1)
 #define IsoscelesTriangle(w,h)       rzr_isosceles_triangle(RZR_INSTANCE,w,h)
 #define IsoscelesTrapezoid(r1,r2,h)  rzr_isosceles_trapezoid(RZR_INSTANCE,r1,r2,h)
 

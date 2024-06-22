@@ -2648,7 +2648,7 @@ int main(int argc, char** argv)
 	#if 1
 	{
 		const int S = 128;
-		begin_tiles(S, S, 4, 2);
+		begin_tiles(S, S, 4, 3);
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
 			Star(40, 1.0f, 0.2f);
@@ -2685,23 +2685,21 @@ int main(int argc, char** argv)
 		}
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
-			Circle(1.0);
 			Save();
 			Translate(-0.1,0.2);
 			Rotate(33);
 			IsoscelesTriangle(0.2, 0.5);
-			Difference();
 			Restore();
 			Save();
 			Rotate(160);
 			IsoscelesTrapezoid(0.1,0.4,0.8);
-			Difference();
+			Union();
 			Restore();
 			Save();
 			Translate(0.5,0.2);
 			Rotate(22);
 			Box(0.3, 0.1);
-			Difference();
+			Union();
 			Restore();
 			end_tile();
 		}
@@ -2722,12 +2720,44 @@ int main(int argc, char** argv)
 			end_tile();
 		}
 
-		for (int t = 0; t < 2; t++) {
+		{
+			struct rzr* rzr = begin_tile(S/2, 16);
+			Arc(120.0, 0.95, 0.2);
+			Arc(120.0, 0.92, 0.14);
+			Difference();
+			Save();
+			Rotate(45);
+			Arc(70.0, 0.7, 0.3);
+			Restore();
+			Union();
+			end_tile();
+		}
+
+		{
+			struct rzr* rzr = begin_tile(S/2, 16);
+			Pattern(0.11,0.1,0.2,0.1);
+			end_tile();
+		}
+
+		#if 0
+		{
+			struct rzr* rzr = begin_tile(S/2, 16);
+			Capsule(0, -0.5, 0.4, 0.5, 0.1, 0.1);
+			Circle(0.1);
+			Union();
+			end_tile();
+		}
+		#endif
+
+
+		#if 1
+		for (int t = 0; t < 3; t++) {
 			struct rzr* rzr = begin_tile(S/2, 16);
 			Save();
 			Rotate(22);
 			if (t == 0) Split();
 			if (t == 1) Line(0.1);
+			if (t == 2) Pattern(0.1,0.1,0.2,0.2);
 			Restore();
 			Circle(0.6);
 			Difference();
@@ -2735,13 +2765,15 @@ int main(int argc, char** argv)
 			Save();
 			Rotate(80);
 			if (t == 0) Split();
-			if (t == 1) Line(0.1);
-			Circle(0.5);
+			if (t == 1) Line(0.05);
+			if (t == 2) Pattern(0.05,0.03);
 			Restore();
+			Circle(0.5);
 			Intersection();
 			Union();
 			end_tile();
 		}
+		#endif
 
 		end_tiles("_rzrdemo_zoo.png");
 	}
