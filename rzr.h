@@ -506,10 +506,12 @@ static inline void rzr_split(struct rzr* rzr)
 static inline void rzr_box(struct rzr* rzr, float width, float height)
 {
 	rzr_begin_poly(rzr);
-	rzr_vertex(rzr, -width, -height);
-	rzr_vertex(rzr,  width, -height);
-	rzr_vertex(rzr,  width,  height);
-	rzr_vertex(rzr, -width,  height);
+	const float wh = 0.5f*width;
+	const float hh = 0.5f*height;
+	rzr_vertex(rzr, -wh, -hh);
+	rzr_vertex(rzr,  wh, -hh);
+	rzr_vertex(rzr,  wh,  hh);
+	rzr_vertex(rzr, -wh,  hh);
 	rzr_end_poly(rzr);
 }
 
@@ -522,24 +524,27 @@ static inline void rzr_rounded_box(struct rzr* rzr, float width, float height, f
 
 	// FIXME: handle width < radius*2 and height < radius*2
 
+	const float wh = 0.5f*width;
+	const float hh = 0.5f*height;
+
 	rzr_begin_poly(rzr);
-	rzr_vertex(rzr , -width        , -height+radius );
-	rzr_vertex(rzr , -width+radius , -height        );
-	rzr_vertex(rzr ,  width-radius , -height        );
-	rzr_vertex(rzr ,  width        , -height+radius );
-	rzr_vertex(rzr ,  width        ,  height-radius );
-	rzr_vertex(rzr ,  width-radius ,  height        );
-	rzr_vertex(rzr , -width+radius ,  height        );
-	rzr_vertex(rzr , -width        ,  height-radius );
+	rzr_vertex(rzr , -wh        , -hh+radius );
+	rzr_vertex(rzr , -wh+radius , -hh        );
+	rzr_vertex(rzr ,  wh-radius , -hh        );
+	rzr_vertex(rzr ,  wh        , -hh+radius );
+	rzr_vertex(rzr ,  wh        ,  hh-radius );
+	rzr_vertex(rzr ,  wh-radius ,  hh        );
+	rzr_vertex(rzr , -wh+radius ,  hh        );
+	rzr_vertex(rzr , -wh        ,  hh-radius );
 	rzr_end_poly(rzr);
 
 	for (int corner = 0; corner < 4; corner++) {
 		rzr_tx_save(rzr);
 		switch (corner) {
-		case 0: rzr_tx_translate(rzr, -width+radius, -height+radius); break;
-		case 1: rzr_tx_translate(rzr,  width-radius, -height+radius); break;
-		case 2: rzr_tx_translate(rzr,  width-radius,  height-radius); break;
-		case 3: rzr_tx_translate(rzr, -width+radius,  height-radius); break;
+		case 0: rzr_tx_translate(rzr, -wh+radius, -hh+radius); break;
+		case 1: rzr_tx_translate(rzr,  wh-radius, -hh+radius); break;
+		case 2: rzr_tx_translate(rzr,  wh-radius,  hh-radius); break;
+		case 3: rzr_tx_translate(rzr, -wh+radius,  hh-radius); break;
 		default: assert(!"unreachable");
 		}
 		rzr_circle(rzr, radius);
@@ -687,7 +692,7 @@ int  rzr_query(struct rzr*, int x, int y);
 #define Star(n,o,i)                  rzr_star(RZR_INSTANCE,n,o,i)
 #define Pattern(...)                 rzr_pattern(RZR_INSTANCE,(float[]) { __VA_ARGS__, 0 })
 #define Line(w)                      rzr_line(RZR_INSTANCE,w)
-#define Split(w)                     rzr_split(RZR_INSTANCE)
+#define Split()                      rzr_split(RZR_INSTANCE)
 #define Arc(a,r,w)                   rzr_arc(RZR_INSTANCE,a,r,w)
 #define Box(w,h)                     rzr_box(RZR_INSTANCE,w,h)
 #define RoundedBox(w,h,r)            rzr_rounded_box(RZR_INSTANCE,w,h,r)
