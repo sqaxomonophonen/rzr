@@ -1664,8 +1664,14 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 	if (y_render_max >= 0) {
 		const int h = rzr->virtual_height;
 		const int y0 = y_render_max+1;
-		int next_y_skip = get_next_yskip(rzr, y0-1);
-		uint8_t* p = pixels + y0*stride;
+		int next_y_skip = get_next_yskip(rzr, -1);
+		int yskip = 0;
+		while (next_y_skip != -1 && next_y_skip < y0) {
+			next_y_skip = get_next_yskip(rzr, next_y_skip);
+			yskip++;
+		}
+		next_y_skip = get_next_yskip(rzr, y0-1);
+		uint8_t* p = pixels + (y0+yskip)*stride;
 		for (int y = y0; y < h; y++) {
 			if (y == next_y_skip) {
 				next_y_skip = get_next_yskip(rzr, y);
