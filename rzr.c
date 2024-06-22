@@ -738,9 +738,9 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 			const int n = op->poly.n_vertices;
 			assert(n_remaining_vertices == 0);
 			n_remaining_vertices = n;
+			yspan_list_index = n_yspan_lists++;
 			if (op->poly.is_valid) {
 				resource_index = n_polys++;
-				yspan_list_index = n_yspan_lists++;
 				stack_delta = 1; // 1 PUSH
 				assert(n >= 3);
 				max_poly_yspan_count += (n-1);
@@ -876,8 +876,10 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 		case RZROP_POLY: {
 			PUSH(pc);
+			NEW_YSPAN_LIST();
 			const int n = op->poly.n_vertices;
 			if (op->poly.is_valid) {
+				assert(ri >= 0);
 				struct poly* poly = &polys[ri];
 				poly->yspan_offset = poly_yspan_cursor;
 
@@ -895,7 +897,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				}
 				qsort(vertex_y_stor, n, sizeof(vertex_y_stor[0]), int_compar);
 				int n_spans = 0;
-				NEW_YSPAN_LIST();
 				for (int i = 1; i < n; i++) {
 					const int y0 = vertex_y_stor[i-1];
 					const int y1 = vertex_y_stor[i];
