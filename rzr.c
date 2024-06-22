@@ -566,6 +566,12 @@ int rzr_subpixel_query(struct rzr* rzr, int subx, int suby)
 		struct rzr_op* op = &rzr->prg[pc];
 		const int opcode = op->code;
 		switch (opcode) {
+		case RZROP_ZERO: {
+			PUSH(0);
+		}	break;
+		case RZROP_ONE: {
+			PUSH(1);
+		}	break;
 		case RZROP_CIRCLE: {
 			const int64_t dx = subx - op->circle.cx;
 			const int64_t dy = suby - op->circle.cy;
@@ -695,6 +701,16 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 		switch (op->code) {
 
+		case RZROP_ZERO: {
+			stack_delta = 1; // 1 PUSH
+			yspan_list_index = n_yspan_lists++;
+		}	break;
+
+		case RZROP_ONE: {
+			stack_delta = 1; // 1 PUSH
+			yspan_list_index = n_yspan_lists++;
+		}	break;
+
 		case RZROP_CIRCLE: {
 			assert(n_remaining_vertices == 0);
 			resource_index = n_circle++;
@@ -797,17 +813,31 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		/* printf("push yspan(pc=%d,[%d;%d],a=%d,b=%d)\n", yspan->pc, yspan->y0, yspan->y1, yspan->ysi_a, yspan->ysi_b); */ \
 	}
 
+	const int supsamp = rzr_get_supersampling_factor(rzr);
+
 	// second program pass:
 	//  - do precalc for shapes
 	//  - create and link y-spans into an AST-like representation by
 	//    running the program (stack operations only)
 	int yspan_list_index = 0;
+	// XXX the PUSH(pc) lines seem a bit redundant...
 	for (int pc = 0; pc < n_ops; pc++) {
 		struct rzr_op* op = &rzr->prg[pc];
 		const int ri = pc2ri[pc];
 
 		const int opcode = op->code;
 		switch (opcode) {
+
+		case RZROP_ZERO: {
+			PUSH(pc);
+			NEW_YSPAN_LIST();
+		}	break;
+
+		case RZROP_ONE: {
+			PUSH(pc);
+			NEW_YSPAN_LIST();
+			PUSH_YSPAN(0, rzr->virtual_height*supsamp, NIL, NIL);
+		}	break;
 
 		case RZROP_POLY: {
 			PUSH(pc);
@@ -1281,12 +1311,11 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 	//assert(!"STOP");
 	#endif
 
-	const int supsamp = rzr_get_supersampling_factor(rzr);
 	assert(supsamp > 0);
 	struct spanline* sub_scanlines = SCRATCH_ALLOCN(supsamp, struct spanline);
 	//memset(sub_scanlines, 0, sizeof(sub_scanlines[0])*supsamp);
 
-	const int virutal_width_subpix = rzr->virtual_width*supsamp;
+	const int virtual_width_subpix = rzr->virtual_width*supsamp;
 
 	int y_render_min=-1, y_render_max=-1;
 	const struct scratch SCRATCH_SNAPSHOT = scratch_save(SCRATCHP);
@@ -1345,6 +1374,14 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					memset(xop, 0, sizeof *xop);
 
 				switch (op->code) {
+
+				case RZROP_ZERO: {
+					SHAPE_XOP();
+				}	break;
+
+				case RZROP_ONE: {
+					SHAPE_XOP();
+				}	break;
 
 				case RZROP_CIRCLE: {
 					SHAPE_XOP();
@@ -1454,7 +1491,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 						_s.w += _s.x; \
 						_s.x = 0; \
 					} \
-					if (_s.x+_s.w > virutal_width_subpix) _s.w = virutal_width_subpix-_s.x; \
+					if (_s.x+_s.w > virtual_width_subpix) _s.w = virtual_width_subpix-_s.x; \
 					if (_s.w <= 0) continue; \
 					struct span* _dst = SCRATCH_TAIL_ALLOC(1); \
 					*_dst = _s; \
@@ -1465,6 +1502,14 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				struct xop* xop = &xops[xpc];
 				const int offset0 = SCRATCH_TAIL_OFFSET();
 				switch (xop->opcode) {
+
+				case RZROP_ZERO: {
+				}	break;
+
+				case RZROP_ONE: {
+					struct span span = { .x=0, .w=virtual_width_subpix };
+					NSPAN(1, &span);
+				}	break;
 
 				case RZROP_CIRCLE: {
 					const int cx = xop->circle.cx;
@@ -1541,7 +1586,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					struct span s = span_stor[offset0+i];
 					assert(s.x >= 0);
 					assert(s.w > 0);
-					assert(s.x+s.w <= virutal_width_subpix);
+					assert(s.x+s.w <= virtual_width_subpix);
 				}
 				assert(rstack_height < rstack_cap);
 				struct rlist* rl = &rstack[rstack_height++];
@@ -2352,6 +2397,7 @@ static void test_3x3(void)
 static void test_regressions(void)
 {
 	{
+		// used to trigger division-by-zero problems in rzr__xline().
 		const int S = 64;
 		struct rzr* rzr = getrz(S/2, S, S, 16);
 		Pattern(0.1,0.1);
@@ -2774,16 +2820,15 @@ int main(int argc, char** argv)
 			end_tile();
 		}
 
-		#if 0
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
-			Capsule(0, -0.5, 0.4, 0.5, 0.1, 0.1);
-			Circle(0.1);
+			Capsule(-0.5, -0.3, 0.7,  0.0, 0.4, 0.1);
+			Capsule(-0.5, -0.3, 0.7,  0.0, 0.35, 0.05);
+			Difference();
+			Segment(-0.6,  0.4, 0.6,  0.4, 0.1);
 			Union();
 			end_tile();
 		}
-		#endif
-
 
 		end_tiles("_rzrdemo_zoo.png");
 	}

@@ -10,6 +10,7 @@ TODO:
 FIXME:
  - A circle precalcs/stores a number of values equal to its subpixel radius
    regardless of image size.
+ - There's something fishy with the capsule zoo demo: weird extra pixels?
 */
 
 #include <assert.h>
@@ -33,15 +34,16 @@ enum rzr_op_code {
 	RZROP_DROP,
 
 	RZROP_ZERO,
+	RZROP_ONE,
 
-	RZROP_POLY, // 3
+	RZROP_POLY,
 	RZROP_VERTEX,
 
-	RZROP_CIRCLE, // 5
+	RZROP_CIRCLE,
 
-	RZROP_UNION, // 6
+	RZROP_UNION,
 	RZROP_INTERSECTION,
-	RZROP_DIFFERENCE, // 8
+	RZROP_DIFFERENCE,
 
 	RZROP_END,
 };
@@ -311,6 +313,11 @@ static inline void rzr_zero(struct rzr* rzr)
 	rzr_op(rzr, RZROP_ZERO);
 }
 
+static inline void rzr_one(struct rzr* rzr)
+{
+	rzr_op(rzr, RZROP_ONE);
+}
+
 static inline void rzr_circle(struct rzr* rzr, float radius)
 {
 	struct rzr_op* op = rzr_op(rzr, RZROP_CIRCLE);
@@ -413,7 +420,6 @@ static int rzr__xline(struct rzr__xlines* rl, float x0, float x1)
 		cprev = c;
 		const float cxmin = cx < prevcx ? cx : prevcx;
 		const float cxmax = cx > prevcx ? cx : prevcx;
-		//const int inside = x0 <= cx && cx <= x1;
 		const int previnside = x0 <= prevcx && prevcx <= x1;
 		if (previnside) {
 			rzr_vertex(rzr, prevcx, prevcy);
@@ -479,32 +485,23 @@ static inline void rzr_pattern(struct rzr* rzr, float* ws)
 		i0 += 1.0f;
 		if (!(i0 > i0p)) break; // paranoia
 	}
-	if (ne == 0) {
-		assert(!"TODO ZERO OP");
-		rzr_zero(rzr);
-	}
+	if (ne == 0) rzr_zero(rzr);
 }
 
 
 static inline void rzr_line(struct rzr* rzr, float width)
 {
+	const float wh = 0.5f*width;
 	struct rzr__xlines rl;
 	rzr__xlines_init(&rl, rzr);
-	const float wh = 0.5f*width;
-	if (!rzr__xline(&rl, -wh, wh)) {
-		assert(!"TODO ZERO OP");
-		rzr_zero(rzr);
-	}
+	if (!rzr__xline(&rl, -wh, wh)) rzr_zero(rzr);
 }
 
 static inline void rzr_split(struct rzr* rzr)
 {
 	struct rzr__xlines rl;
 	rzr__xlines_init(&rl, rzr);
-	if (rl.xmax <= 0.0f || !rzr__xline(&rl, 0.0f, rl.xmax)) {
-		assert(!"TODO ZERO OP");
-		rzr_zero(rzr);
-	}
+	if (rl.xmax <= 0.0f || !rzr__xline(&rl, 0.0f, rl.xmax)) rzr_zero(rzr);
 }
 
 static inline void rzr_box(struct rzr* rzr, float width, float height)
@@ -591,23 +588,36 @@ static inline void rzr_arc(struct rzr* rzr, float aperture_degrees, float radius
 
 static inline void rzr_capsule(struct rzr* rzr, float x0, float y0, float x1, float y1, float r0, float r1)
 {
-	#if 0
 	const float dx = x1-x0;
 	const float dy = y1-y0;
-	const float a = atan2(dy, dx);
-	const float b = asinf((r1-r0) / sqrtf(dx*dx + dy*dy));
+	if (dx == 0.0f && dy == 0.0f) {
+		rzr_circle(rzr, r0>r1?r0:r1);
+		return;
+	}
+	const float a = -atan2(dy, dx);
+	const float b = (r0==r1) ? 0.0f : asinf((r1-r0) / sqrtf(dx*dx + dy*dy));
+	const float s0 = sinf(a-b);
+	const float s1 = sinf(a+b);
+	const float c0 = cosf(a-b);
+	const float c1 = cosf(a+b);
 	rzr_begin_poly(rzr);
-	const float s0 = sinf(a+b);
-	const float s1 = sinf(a-b);
-	const float c0 = cosf(a+b);
-	const float c1 = cosf(a-b);
-	rzr_vertex(rzr, x0 + r0*s0, y0 + r0*c0);
 	rzr_vertex(rzr, x1 + r1*s0, y1 + r1*c0);
-	rzr_vertex(rzr, x1 - r1*s1, y1 - r1*c1);
+	rzr_vertex(rzr, x0 + r0*s0, y0 + r0*c0);
 	rzr_vertex(rzr, x0 - r0*s1, y0 - r0*c1);
+	rzr_vertex(rzr, x1 - r1*s1, y1 - r1*c1);
 	rzr_end_poly(rzr);
-	#endif
-	assert(!"TODO");
+
+	rzr_tx_save(rzr);
+	rzr_tx_translate(rzr, x0, y0);
+	rzr_circle(rzr, r0);
+	rzr_tx_restore(rzr);
+	rzr_union(rzr);
+
+	rzr_tx_save(rzr);
+	rzr_tx_translate(rzr, x1, y1);
+	rzr_circle(rzr, r1);
+	rzr_tx_restore(rzr);
+	rzr_union(rzr);
 }
 
 static inline void rzr_segment(struct rzr* rzr, float x0, float y0, float x1, float y1, float r)
@@ -665,6 +675,9 @@ int  rzr_query(struct rzr*, int x, int y);
 #define Union()                      rzr_union(RZR_INSTANCE)
 #define Intersection()               rzr_intersection(RZR_INSTANCE)
 #define Difference()                 rzr_difference(RZR_INSTANCE)
+
+#define Zero()                       rzr_zero(RZR_INSTANCE)
+#define One()                        rzr_one(RZR_INSTANCE)
 
 #define Circle(r)                    rzr_circle(RZR_INSTANCE,r)
 
