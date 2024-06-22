@@ -2800,7 +2800,7 @@ int main(int argc, char** argv)
 			Save();
 			Rotate(22);
 			if (t == 0) Split();
-			if (t == 1) Line(0.1);
+			if (t == 1) Line(0.3);
 			if (t == 2) Pattern(0.05,0.05,0.05,0.1,0.2,0.1);
 			Restore();
 			Circle(0.6);
@@ -2877,6 +2877,20 @@ int main(int argc, char** argv)
 			Difference();
 			Segment(-0.6,  0.4, 0.6,  0.4, 0.1);
 			Union();
+			end_tile();
+		}
+
+		{
+			struct rzr* rzr = begin_tile(S/2, 16);
+			One();
+			const int N = 10;
+			const float R0 = 0.8f;
+			const float R1 = 0.6f;
+			for (int i = 0; i < N; i++) {
+				const float m = 1.0f - (float)i/(float)N;
+				Star(12, R0*m, R1*m);
+				if ((i&1) == 0) Difference(); else Union();
+			}
 			end_tile();
 		}
 
