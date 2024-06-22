@@ -3,7 +3,6 @@
 /*
 TODO:
  - allow out-of-memory errors without crashing?
- - implement pick/swap/drop
  - improve robustness of rzr__xline()? it powers "Split", "Line" and "Pattern".
    it probably has numerical problems with near-vertical lines (prevcx~=cx),
    and lines crossing close to corners

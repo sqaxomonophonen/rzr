@@ -701,6 +701,18 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 		switch (op->code) {
 
+		case RZROP_PICK: {
+			stack_delta = 1;
+		}	break;
+
+		case RZROP_DROP: {
+			stack_delta = -1;
+		}	break;
+
+		case RZROP_SWAP: {
+			stack_delta = 0;
+		}	break;
+
 		case RZROP_ZERO: {
 			stack_delta = 1; // 1 PUSH
 			yspan_list_index = n_yspan_lists++;
@@ -820,13 +832,31 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 	//  - create and link y-spans into an AST-like representation by
 	//    running the program (stack operations only)
 	int yspan_list_index = 0;
-	// XXX the PUSH(pc) lines seem a bit redundant...
 	for (int pc = 0; pc < n_ops; pc++) {
 		struct rzr_op* op = &rzr->prg[pc];
 		const int ri = pc2ri[pc];
 
 		const int opcode = op->code;
 		switch (opcode) {
+
+		case RZROP_PICK: {
+			int i = op->pick.stack_index;
+			if (i < 0) i = stack_height + i;
+			assert(0 <= i && i < stack_height);
+			const int v = stack[i];
+			PUSH(v);
+		}	break;
+
+		case RZROP_DROP: {
+			(void)POP();
+		}	break;
+
+		case RZROP_SWAP: {
+			assert(stack_height >= 2);
+			const int tmp = stack[stack_height-1];
+			stack[stack_height-1] = stack[stack_height-2];
+			stack[stack_height-2] = tmp;
+		}	break;
 
 		case RZROP_ZERO: {
 			PUSH(pc);
