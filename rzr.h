@@ -4,6 +4,9 @@
 TODO:
  - allow out-of-memory errors without crashing?
  - implement pick/swap/drop
+ - improve robustness of rzr__xline()? it powers "Split", "Line" and "Pattern".
+   it probably has numerical problems with near-vertical lines (prevcx~=cx),
+   and lines crossing close to corners
 FIXME:
  - A circle precalcs/stores a number of values equal to its subpixel radius
    regardless of image size.
@@ -415,17 +418,22 @@ static int rzr__xline(struct rzr__xlines* rl, float x0, float x1)
 		if (previnside) {
 			rzr_vertex(rzr, prevcx, prevcy);
 		}
+		if (cx == prevcx) continue;
 		const int x0vis = cxmin <= x0 && x0 <= cxmax;
 		const int x1vis = cxmin <= x1 && x1 <= cxmax;
 		if (!x0vis && !x1vis) continue;
 		const float y0 = !x0vis ? 0.0f : prevcy + ((x0-prevcx)/(cx-prevcx)) * (cy-prevcy);
-		const float y1 = !x0vis ? 0.0f : prevcy + ((x1-prevcx)/(cx-prevcx)) * (cy-prevcy);
+		const float y1 = !x1vis ? 0.0f : prevcy + ((x1-prevcx)/(cx-prevcx)) * (cy-prevcy);
 		if (x0vis && x1vis) {
 			if (cx > prevcx) {
-				if (!previnside) rzr_vertex(rzr, x0, y0);
+				if (!previnside) {
+					rzr_vertex(rzr, x0, y0);
+				}
 				rzr_vertex(rzr, x1, y1);
 			} else {
-				if (!previnside) rzr_vertex(rzr, x1, y1);
+				if (!previnside) {
+					rzr_vertex(rzr, x1, y1);
+				}
 				rzr_vertex(rzr, x0, y0);
 			}
 		} else if (x0vis && !x1vis) {

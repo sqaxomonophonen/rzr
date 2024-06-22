@@ -2349,8 +2349,23 @@ static void test_3x3(void)
 	}
 }
 
+static void test_regressions(void)
+{
+	{
+		const int S = 64;
+		struct rzr* rzr = getrz(S/2, S, S, 16);
+		Pattern(0.1,0.1);
+		uint8_t scratch[1<<18];
+		const size_t scratch_sz = sizeof(scratch);
+		uint8_t pixels[S*S];
+		memset(pixels, 0xfe, sizeof pixels);
+		rzr_render(rzr, scratch_sz, scratch, S, pixels);
+	}
+}
+
 int main(int argc, char** argv)
 {
+	test_regressions();
 	test_spanlist_parser_and_unparser();
 	test_span_overlaps();
 	test_binop_union();
@@ -2683,6 +2698,32 @@ int main(int argc, char** argv)
 			Intersection();
 			end_tile();
 		}
+
+		#if 1
+		for (int t = 0; t < 3; t++) {
+			struct rzr* rzr = begin_tile(S/2, 16);
+			Save();
+			Rotate(22);
+			if (t == 0) Split();
+			if (t == 1) Line(0.1);
+			if (t == 2) Pattern(0.05,0.05,0.05,0.1,0.2,0.1);
+			Restore();
+			Circle(0.6);
+			Difference();
+
+			Save();
+			Rotate(80);
+			if (t == 0) Split();
+			if (t == 1) Line(0.05);
+			if (t == 2) Pattern(0.05,0.03);
+			Restore();
+			Circle(0.5);
+			Intersection();
+			Union();
+			end_tile();
+		}
+		#endif
+
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
 			Save();
@@ -2733,12 +2774,6 @@ int main(int argc, char** argv)
 			end_tile();
 		}
 
-		{
-			struct rzr* rzr = begin_tile(S/2, 16);
-			Pattern(0.11,0.1,0.2,0.1);
-			end_tile();
-		}
-
 		#if 0
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
@@ -2749,31 +2784,6 @@ int main(int argc, char** argv)
 		}
 		#endif
 
-
-		#if 1
-		for (int t = 0; t < 3; t++) {
-			struct rzr* rzr = begin_tile(S/2, 16);
-			Save();
-			Rotate(22);
-			if (t == 0) Split();
-			if (t == 1) Line(0.1);
-			if (t == 2) Pattern(0.1,0.1,0.2,0.2);
-			Restore();
-			Circle(0.6);
-			Difference();
-
-			Save();
-			Rotate(80);
-			if (t == 0) Split();
-			if (t == 1) Line(0.05);
-			if (t == 2) Pattern(0.05,0.03);
-			Restore();
-			Circle(0.5);
-			Intersection();
-			Union();
-			end_tile();
-		}
-		#endif
 
 		end_tiles("_rzrdemo_zoo.png");
 	}
