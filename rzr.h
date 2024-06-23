@@ -8,7 +8,6 @@ TODO/FIXME:
    and lines crossing close to corners
  - A circle precalcs/stores a number of values equal to its subpixel radius
    regardless of image size.
- - There's something fishy with the capsule zoo demo: weird extra pixels?
  - `post_order_stack` and `xops` could use proper memory management; see
    comments.
  - The polygon xspan sorting/finding is fragile; see comment; I've also seen

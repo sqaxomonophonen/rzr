@@ -670,6 +670,69 @@ void rzr_queries(struct rzr* rzr, int n, int* coord_pairs, int* out_inside)
 	}
 }
 
+struct ystepper {
+	struct rzr* rzr;
+	int stride;
+	uint8_t* pixels;
+	uint8_t* pp;
+	int y, next_y_skip, y1;
+	int supsamp;
+	int draw;
+	struct spanline sub_scanlines[RZR_MAX_SUPERSAMPLING_FACTOR];
+};
+
+static void ystepper_init(struct ystepper* ys, struct rzr* rzr, int stride, uint8_t* pixels)
+{
+	memset(ys, 0, sizeof *ys);
+	ys->rzr = rzr;
+	ys->stride = stride;
+	ys->pixels = pixels;
+	ys->pp = ys->pixels;
+	ys->next_y_skip = get_next_skip(ys->rzr->n_heights, ys->rzr->heights, -1);
+	ys->supsamp = rzr_get_supersampling_factor(ys->rzr);
+	ys->y1 = ys->rzr->virtual_height * ys->supsamp - 1;
+}
+
+static inline int ystepper_advance(struct ystepper* ys, int to_y)
+{
+	assert(to_y >= ys->y);
+	const int ss = ys->supsamp;
+	int can_reset = 0;
+	for (; ys->y < to_y; ys->y++) {
+		const int y = ys->y;
+		if (y/ss == ys->next_y_skip) {
+			ys->next_y_skip = get_next_skip(ys->rzr->n_heights, ys->rzr->heights, y);
+			ys->pp += ys->stride;
+		}
+		const int subline = y % ss;
+		if (subline == (ss-1)) {
+			if (ys->draw) {
+				subrender(ys->pp, ys->rzr->n_widths, ys->rzr->widths, ss, ys->sub_scanlines);
+				memset(ys->sub_scanlines, 0, ss*sizeof(ys->sub_scanlines[0]));
+				ys->draw = 0;
+				can_reset = 1;
+			} else {
+				memset(ys->pp, 0, ys->rzr->bitmap_width);
+			}
+			ys->pp += ys->stride;
+		}
+	}
+	return can_reset;
+}
+
+static inline void ystepper_end(struct ystepper* ys)
+{
+	ystepper_advance(ys, ys->y1+1);
+}
+
+struct spanline* ystepper_spanline(struct ystepper* ys)
+{
+	ys->draw = 1;
+	const int y = ys->y;
+	assert(0 <= y && y <= ys->y1);
+	return &ys->sub_scanlines[y % ys->supsamp];
+}
+
 static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_t* pixels)
 {
 	const int NIL = -1;
@@ -1348,18 +1411,14 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 	#endif
 
 	assert(supsamp > 0);
-	struct spanline* sub_scanlines = SCRATCH_ALLOCN(supsamp, struct spanline);
-	//memset(sub_scanlines, 0, sizeof(sub_scanlines[0])*supsamp);
-
 	const int virtual_width_subpix = rzr->virtual_width*supsamp;
-
-	int y_render_min=-1, y_render_max=-1;
 	const struct scratch SCRATCH_SNAPSHOT = scratch_save(SCRATCHP);
 	struct span* span_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct span);
-	uint8_t* ppix = NULL;
+
+	struct ystepper ystepper;
+	ystepper_init(&ystepper, rzr, stride, pixels);
+
 	const int yy1 = rzr->virtual_height * supsamp - 1;
-	int next_yy_skip = get_next_skip(rzr->n_heights, rzr->heights, -1);
-	int yy_skip = 0;
 	for (int i = 0; i < ysl->n; i++) {
 		const int iroot = ysl->offset+i;
 		struct yspan* yroot = &yspan_stor[iroot];
@@ -1502,17 +1561,14 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 			}
 		} while (post_order_stack_height > 0);
 
+
 		// execute xop-program for each sub-scanline in [root_y0;root_y1]
 		for (int y = root_y0; y <= root_y1; y++) {
-			const int sub_scanline_i = (y % supsamp);
-			const int yy = (y / supsamp);
-			if (yy == next_yy_skip) {
-				next_yy_skip = get_next_skip(rzr->n_heights, rzr->heights, yy);
-				yy_skip++;
+			if (ystepper_advance(&ystepper, y)) {
+				SCRATCH_TAIL_ALLOC_END();
+				scratch_restore(SCRATCHP, &SCRATCH_SNAPSHOT);
+				span_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct span);
 			}
-			assert(0 <= yy && yy < rzr->virtual_height);
-			if (y_render_min == -1 || yy < y_render_min) y_render_min = yy;
-			if (y_render_max == -1 || yy > y_render_max) y_render_max = yy;
 
 			struct rlist { int offset,count; };
 			const int rstack_cap = 1<<13;
@@ -1640,60 +1696,15 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 			assert(rstack_height > 0);
 			struct rlist rx = rstack[--rstack_height];
 
-			assert(0 <= sub_scanline_i && sub_scanline_i < supsamp);
-			struct spanline* ssc = &sub_scanlines[sub_scanline_i];
-			ssc->spans = span_stor + rx.offset;
-			ssc->n = rx.count;
-
-			ppix = pixels + (yy + yy_skip) * stride;
-			if (sub_scanline_i == (supsamp-1)) {
-				subrender(ppix, rzr->n_widths, rzr->widths, supsamp, sub_scanlines);
-				// reset scratch
-				SCRATCH_TAIL_ALLOC_END();
-				scratch_restore(SCRATCHP, &SCRATCH_SNAPSHOT);
-				span_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct span);
-				memset(sub_scanlines, 0, sizeof(sub_scanlines[0])*supsamp);
+			if (rx.count > 0) {
+				struct spanline* ssc = ystepper_spanline(&ystepper);
+				ssc->n = rx.count;
+				ssc->spans = span_stor + rx.offset;
 			}
 		}
-	}
-	if (SCRATCH_TAIL_OFFSET() > 0) {
-		subrender(ppix, rzr->n_widths, rzr->widths, supsamp, sub_scanlines);
 	}
 	SCRATCH_TAIL_ALLOC_END();
-
-	if (y_render_min > 0) {
-		uint8_t* p = pixels;
-		int next_y_skip = get_next_yskip(rzr, -1);
-		for (int y = 0; y < y_render_min; y++) {
-			if (y == next_y_skip) {
-				next_y_skip = get_next_yskip(rzr, y);
-				p += stride;
-			}
-			memset(p, 0, rzr->bitmap_width);
-			p += stride;
-		}
-	}
-
-	if (y_render_max >= 0) {
-		const int h = rzr->virtual_height;
-		const int y0 = y_render_max+1;
-		int next_y_skip = get_next_yskip(rzr, -1);
-		int yskip = 0;
-		while (next_y_skip != -1 && next_y_skip < y0) {
-			next_y_skip = get_next_yskip(rzr, next_y_skip);
-			yskip++;
-		}
-		next_y_skip = get_next_yskip(rzr, y0-1);
-		uint8_t* p = pixels + (y0+yskip)*stride;
-		for (int y = y0; y < h; y++) {
-			if (y == next_y_skip) {
-				next_y_skip = get_next_yskip(rzr, y);
-				p += stride;
-			}
-			memset(p, 0, rzr->bitmap_width);
-			p += stride;
-		}
-	}
+	ystepper_end(&ystepper);
 
 	//printf("allocated/max:    %zd\n", SCRATCH.cursor_max);
 
@@ -2343,12 +2354,11 @@ static void test_subrender(void)
 	#undef RTEST
 }
 
-static void bitmap_ascii_dump(int width, int height, uint8_t* pixels)
+static void bitmap_ascii_dump(int width, int height, const uint8_t* pixels)
 {
-	printf("\n");
 	for (int y = 0; y < height; y++) {
 		{
-			uint8_t* p = pixels + y*width;
+			const uint8_t* p = pixels + y*width;
 			for (int x = 0; x < width; x++) {
 				const int v = *(p++);
 				printf("%.2x", v);
@@ -2356,7 +2366,7 @@ static void bitmap_ascii_dump(int width, int height, uint8_t* pixels)
 		}
 		printf("   ");
 		{
-			uint8_t* p = pixels + y*width;
+			const uint8_t* p = pixels + y*width;
 			for (int x = 0; x < width; x++) {
 				const int v = *(p++);
 				const char c = " .:ioVM@"[v>>5];
@@ -2367,22 +2377,74 @@ static void bitmap_ascii_dump(int width, int height, uint8_t* pixels)
 	}
 }
 
+static int hexdigit(char c)
+{
+	if ('0' <= c && c <= '9') {
+		return c-'0';
+	} else if ('a' <= c && c <= 'f') {
+		return c-'a'+10;
+	} else if ('A' <= c && c <= 'F') {
+		return c-'A'+10;
+	} else {
+		fprintf(stderr, "[%c] is not a hex digit\n", c);
+		abort();
+	}
+}
+
+static void validate_bitmap(int width, int height, const uint8_t* pixels, const char* im)
+{
+	const char* p = im;
+	const uint8_t* pp = pixels;
+	for (int y = 0; y < height; y++) {
+		for (int x = 0; x < width; x++) {
+			const int nc0 = hexdigit(*(p++));
+			const int nc1 = hexdigit(*(p++));
+			uint8_t pix = *(pp++);
+			if (nc0 != (pix>>4) || nc1 != (pix&15)) {
+				printf("Expected:\n");
+				bitmap_ascii_dump(width, height, pixels);
+				printf("Got:\n%sMismatch in x=%d y=%d\n", im, x, y);
+				abort();
+			}
+		}
+		assert((*(p++) == '\n') && "bad ascii image");
+	}
+}
+
 static void test_rzr(void)
 {
-	const int width = 32;
-	const int height = 32;
+	const int width = 16;
+	const int height = 16;
 	struct rzr* rzr = getrz(width/2, width, height, 16);
 	Circle(1.0f);
-	Circle(0.9f);
+	Circle(0.8f);
 	Difference();
-	Star(8, 0.9f, 0.3f);
+	Star(6, 0.9f, 0.2f);
 	Union();
 	uint8_t scratch[1<<18];
 	const size_t scratch_sz = sizeof(scratch);
 	uint8_t pixels[width*height];
 	memset(pixels, 0xfe, sizeof pixels);
 	rzr_render(rzr, scratch_sz, scratch, width, pixels);
-	bitmap_ascii_dump(width, height, pixels);
+	//bitmap_ascii_dump(width, height, pixels);
+	validate_bitmap(width, height, pixels,
+	"000000002185c8eaebcb8a2700000000\n"
+	"00000284faffe1c1c0ddfffc8f050000\n"
+	"0002b1ffc137003b3b0030b8ffbd0600\n"
+	"0084ff960200005b5b00000088ff9400\n"
+	"21fad6040000007a7a00000002cbfd2e\n"
+	"85ff50a26e0d009e9e000d6ea241fe95\n"
+	"c8e100069bf292d4d492f29b0600d1d8\n"
+	"eab500000064f9fffff964000000a5fa\n"
+	"ebb400000045efffffef45000000a4fb\n"
+	"cbdd00017bf8aedadaaef87b0100cddb\n"
+	"8aff3d9f891f00a7a7001f899f2ffd9a\n"
+	"27fcd70a000000858500000009ccfe35\n"
+	"008fff880000005d5d00000079ff9f00\n"
+	"0005bdffb328003d3d0022a9ffc80a00\n"
+	"00000694fdfed1b4b3cdfdfe9f0a0000\n"
+	"000000002e95d8fafbdb9a3500000000\n"
+	);
 }
 
 static void test_3x3(void)
@@ -2398,7 +2460,7 @@ static void test_3x3(void)
 	memset(pixels, 0xfe, sizeof pixels);
 	rzr_render(rzr, scratch_sz, scratch, rzr->bitmap_width, pixels);
 
-	const char* msg = "(-: STREEEETCH :-)";
+	const char* msg = "(-: STRETCH TEST :-)";
 
 	const int nch = strlen(msg);
 	const int inner_width = (nch+1)/2 + 2;
@@ -2443,24 +2505,59 @@ static void test_3x3(void)
 	}
 }
 
-static void test_regressions(void)
+static void test_regression0(void)
 {
-	{
-		// used to trigger division-by-zero problems in rzr__xline().
-		const int S = 64;
-		struct rzr* rzr = getrz(S/2, S, S, 16);
-		Pattern(0.1,0.1);
-		uint8_t scratch[1<<18];
-		const size_t scratch_sz = sizeof(scratch);
-		uint8_t pixels[S*S];
-		memset(pixels, 0xfe, sizeof pixels);
-		rzr_render(rzr, scratch_sz, scratch, S, pixels);
-	}
+	// used to trigger division-by-zero problems in rzr__xline().
+	const int S = 64;
+	struct rzr* rzr = getrz(S/2, S, S, 16);
+	Pattern(0.1,0.1);
+	uint8_t scratch[1<<18];
+	const size_t scratch_sz = sizeof(scratch);
+	uint8_t pixels[S*S];
+	memset(pixels, 0xfe, sizeof pixels);
+	rzr_render(rzr, scratch_sz, scratch, S, pixels);
+}
+
+static void test_regression1(void)
+{
+	// testing for problems with empty y-span
+	const int S = 16;
+	struct rzr* rzr = getrz(S/2, S, S, 16);
+	Save();
+	Translate(0, -0.5);
+	Circle(0.2);
+	Restore();
+	Segment(-0.5, 0.5, 0.5, 0.5, 0.3);
+	Union();
+	uint8_t scratch[1<<18];
+	const size_t scratch_sz = sizeof(scratch);
+	uint8_t pixels[S*S];
+	memset(pixels, 0xfe, sizeof pixels);
+	rzr_render(rzr, scratch_sz, scratch, S, pixels);
+	//bitmap_ascii_dump(S, S, pixels);
+	validate_bitmap(S, S, pixels,
+	"00000000000000000000000000000000\n"
+	"00000000000000000000000000000000\n"
+	"00000000000005717708000000000000\n"
+	"00000000000071ffff81000000000000\n"
+	"00000000000077ffff87000000000000\n"
+	"0000000000000881870c000000000000\n"
+	"00000000000000000000000000000000\n"
+	"00000000000000000000000000000000\n"
+	"00000000000000000000000000000000\n"
+	"0000003b5f5f5f5f5f5f5f5f3f010000\n"
+	"0000b3ffffffffffffffffffffc00300\n"
+	"003bffffffffffffffffffffffff4b00\n"
+	"003fffffffffffffffffffffffff4f00\n"
+	"0001c0ffffffffffffffffffffcc0500\n"
+	"0000034b5f5f5f5f5f5f5f5f4f050000\n"
+	"00000000000000000000000000000000\n");
 }
 
 int main(int argc, char** argv)
 {
-	test_regressions();
+	test_regression1();
+	test_regression0();
 	test_spanlist_parser_and_unparser();
 	test_span_overlaps();
 	test_binop_union();
@@ -2872,9 +2969,13 @@ int main(int argc, char** argv)
 
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
+			#if 1
 			Capsule(-0.5, -0.3, 0.7,  0.0, 0.4, 0.1);
 			Capsule(-0.5, -0.3, 0.7,  0.0, 0.35, 0.05);
 			Difference();
+			#else
+			Circle(0.1);
+			#endif
 			Segment(-0.6,  0.4, 0.6,  0.4, 0.1);
 			Union();
 			end_tile();
