@@ -54,10 +54,10 @@ enum rzr_op_code {
 struct rzr_op {
 	enum rzr_op_code code;
 	union {
-		struct { int stack_index;          } pick;
-		struct { int cx,cy,radius;         } circle;
-		struct { int n_vertices, is_valid; } poly;
-		struct { int x,y;                  } vertex;
+		struct { int stack_index;  } pick;
+		struct { int cx,cy,radius; } circle;
+		struct { int n_vertices;   } poly;
+		struct { int x,y;          } vertex;
 	};
 };
 
@@ -336,7 +336,6 @@ static inline void rzr_begin_poly(struct rzr* rzr)
 	rzr->poly_op_index = rzr->prg_length;
 	struct rzr_op* op = rzr_op(rzr, RZROP_POLY);
 	op->poly.n_vertices = -1;
-	op->poly.is_valid = 0;
 	rzr->in_poly = 1;
 }
 
@@ -358,8 +357,12 @@ static inline void rzr_end_poly(struct rzr* rzr)
 		iprev = i;
 		area += (op->vertex.x - prevop->vertex.x) * (op->vertex.y + prevop->vertex.y);
 	}
-	op->poly.is_valid = area < 0;
 	rzr->in_poly = 0;
+	if (area >= 0) {
+		// invalid polygon; replace with zero
+		rzr->prg_length = rzr->poly_op_index;
+		rzr_zero(rzr);
+	}
 }
 
 static inline void rzr_map_point(struct rzr_tx* tx, float x, float y, float* out_u, float* out_v)
