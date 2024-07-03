@@ -2493,7 +2493,7 @@ static void test_3x3(void)
 	}
 }
 
-static void test_regression0(void)
+static void test_regression_000(void)
 {
 	// used to trigger division-by-zero problems in rzr__xline().
 	const int S = 64;
@@ -2506,7 +2506,7 @@ static void test_regression0(void)
 	rzr_render(rzr, scratch_sz, scratch, S, pixels);
 }
 
-static void test_regression1(void)
+static void test_regression_001(void)
 {
 	// testing for problems with empty y-span
 	const int S = 16;
@@ -2542,10 +2542,39 @@ static void test_regression1(void)
 	"00000000000000000000000000000000\n");
 }
 
+#if 0
+static void test_regression_002(void)
+{
+	// A Box(2,2) on a 2x2 canvas would fill everything but the rightmost
+	// subpixel
+	const int S = 6;
+	const int SS = 3;
+	struct rzr* rzr = getrz(S/2, S, S, SS);
+	Box(2,2);
+	uint8_t scratch[1<<18];
+	const size_t scratch_sz = sizeof(scratch);
+	uint8_t pixels[S*S];
+	memset(pixels, 0xfe, sizeof pixels);
+	rzr_render(rzr, scratch_sz, scratch, S, pixels);
+	validate_bitmap(S, S, pixels,
+	//                     vvv used to be like this vvv
+	"ffffffffffff\n"    // ffffffffffc6
+	"ffffffffffff\n"    // ffffffffffaa
+	"ffffffffffff\n"    // ffffffffffaa
+	"ffffffffffff\n"    // ffffffffffaa
+	"ffffffffffff\n"    // ffffffffffaa
+	"ffffffffffff\n"    // ffffffffffaa
+	);
+}
+#endif
+
 int main(int argc, char** argv)
 {
-	test_regression1();
-	test_regression0();
+	#if 0
+	test_regression_002();
+	#endif
+	test_regression_001();
+	test_regression_000();
 	test_spanlist_parser_and_unparser();
 	test_span_overlaps();
 	test_binop_union();
