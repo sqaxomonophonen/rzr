@@ -2389,9 +2389,9 @@ static void validate_bitmap(int width, int height, const uint8_t* pixels, const 
 			const int nc1 = hexdigit(*(p++));
 			uint8_t pix = *(pp++);
 			if (nc0 != (pix>>4) || nc1 != (pix&15)) {
-				printf("Expected:\n");
+				printf("Expected:\n%sGot:\n", im);
 				bitmap_ascii_dump(width, height, pixels);
-				printf("Got:\n%sMismatch in x=%d y=%d\n", im, x, y);
+				printf("Mismatch in x=%d y=%d\n", x, y);
 				abort();
 			}
 		}
