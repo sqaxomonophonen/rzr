@@ -14,7 +14,7 @@
 ## Examples
 
 ![](./_rzrdemo_zoo.png)
-![](./_rzrdemo_trirot.gif)
+![](./_rzrdemo_anim.gif)
 ![](./_rzrdemo_sharp.png)
 
 Generated with: `cc -DDEMOS -Wall -O0 -g rzr.c -o demo_rzr -lm && ./demo_rzr`.

@@ -536,19 +536,16 @@ static inline int lineseg_eval_x_at_y(int x0, int y0, int x1, int y1, int y)
 }
 
 struct poly_xedge {
-	int y0;
-	int x, side, xstep, numerator, denominator;
-};
-
-struct poly_xspan {
-	struct poly_xedge edge[2];
+	int y0, y1;
+	int x0, x1;
+	int side;
 };
 
 static int poly_xedge_compar(const void* va, const void* vb)
 {
 	const struct poly_xedge* a = va;
 	const struct poly_xedge* b = vb;
-	const int dx = a->x - b->x;
+	const int dx = a->x0 - b->x0;
 	if (dx != 0) return dx;
 	const int dside = a->side - b->side;
 	return dside;
@@ -1286,17 +1283,9 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				}
 				assert(xedge != NULL);
 				xedge->y0 = yspan->y0;
-				xedge->x = x0;
-				xedge->denominator = yspan->y1 - yspan->y0 + 1;
-
-				if (x1 > x0) {
-					xedge->numerator = x1-x0;
-					xedge->xstep = 1;
-				} else {
-					xedge->numerator = x0-x1;
-					xedge->xstep = -1;
-				}
-				assert(xedge->denominator > 0);
+				xedge->y1 = yspan->y1;
+				xedge->x0 = x0;
+				xedge->x1 = x1;
 			}
 			assert(n_left == n_right);
 			assert(n_left > 0 && n_right > 0);
@@ -1322,7 +1311,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 			qsort(xedges_begin, n_xedges, sizeof xedges_begin[0], poly_xedge_compar);
 			for (int i2 = 1; i2 < n_xedges; i2+=2) {
 				if (xedges_begin[i2].side == 1) continue;
-				if (xedges_begin[i2].x == xedges_begin[i2+1].x && xedges_begin[i2+1].side == 1) {
+				if (xedges_begin[i2].x0 == xedges_begin[i2+1].x0 && xedges_begin[i2+1].side == 1) {
 					struct poly_xedge tmp = xedges_begin[i2];
 					xedges_begin[i2] = xedges_begin[i2+1];
 					xedges_begin[i2+1] = tmp;
@@ -1337,39 +1326,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		}
 	}
 	SCRATCH_TAIL_ALLOC_END();
-
-	//////////////////////////////////////
-	// setup polygon render states
-	struct xedge_state {
-		int x,xstep;
-		int numerator;
-		int denominator;
-		int accumulator;
-	};
-
-	struct xspan_state {
-		int y;
-		struct xedge_state edge_states[2];
-	};
-
-	struct xspan_state* xspan_states_stor = SCRATCH_ALLOCN(n_xspans, struct xspan_state);
-	for (int i0 = 0; i0 < n_xspans; i0++) {
-		const struct poly_xedge* src_edges = &xedges_stor[i0<<1];
-		struct xspan_state* dst_span = &xspan_states_stor[i0];
-		dst_span->y = src_edges->y0;
-		assert(src_edges[1].y0 == dst_span->y);
-		for (int i1 = 0; i1 < 2; i1++) {
-			const struct poly_xedge* src = &src_edges[i1];
-			assert(src->side == i1);
-			struct xedge_state* dst = &dst_span->edge_states[i1];
-			dst->x = src->x;
-			dst->xstep = src->xstep;
-			dst->numerator = src->numerator;
-			assert(src->denominator > 0);
-			dst->denominator = src->denominator;
-			dst->accumulator = src->denominator;
-		}
-	}
 
 	if (stack_height < 1) return;
 
@@ -1551,7 +1507,8 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 
 		// execute xop-program for each sub-scanline in [root_y0;root_y1]
-		for (int y = root_y0; y <= root_y1; y++) {
+		for (int _y = root_y0; _y <= root_y1; _y++) {
+			const int y = _y;
 			if (ystepper_advance(&ystepper, y)) {
 				SCRATCH_TAIL_ALLOC_END();
 				scratch_restore(SCRATCHP, &SCRATCH_SNAPSHOT);
@@ -1625,25 +1582,29 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					const int xspan_count = ps->xspan_count;
 
 					for (int si = 0; si < xspan_count; si++) {
-						struct xspan_state* xs = &xspan_states_stor[xspan_offset+si];
-						while (xs->y <= y) {
-							struct span span = {
-								.x = xs->edge_states[0].x,
-								.w = xs->edge_states[1].x - xs->edge_states[0].x,
-							};
-							if (span.w > 0 && xs->y == y) {
-								NSPAN(1, &span);
+						const struct poly_xedge* xedges  = &xedges_stor[(si+xspan_offset)*2];
+						int xs[2];
+						for (int side = 0; side < 2; side++) {
+							const struct poly_xedge* xe = &xedges[side];
+							assert(xe->side == side);
+							const int y0=xe->y0, y1=xe->y1, x0=xe->x0, x1=xe->x1;
+							assert(y0 <= y && y <= y1);
+							const int stp = y1-y0+1;
+							const int hfstp = stp/2;
+							int dx = (x1-x0)*(y-y0) + hfstp;
+							if (dx >= 0) {
+								xs[side] = x0 + (dx/stp);
+							} else {
+								dx = (-dx+stp);
+								assert(dx >= 0);
+								xs[side] = x0 - (dx/stp);
 							}
-							for (int ei = 0; ei < 2; ei++) {
-								struct xedge_state* es = &xs->edge_states[ei];
-								assert(es->numerator >= 0);
-								es->accumulator += es->numerator;
-								const int n = es->accumulator / es->denominator;
-								es->x += es->xstep * n;
-								es->accumulator -= es->denominator * n;
-							}
-							xs->y++;
 						}
+						const int x0=xs[0], x1=xs[1];
+						assert(x1 >= x0);
+						if (x0 == x1) continue;
+						struct span span = { .x = x0, .w = x1-x0 };
+						NSPAN(1, &span);
 					}
 
 				}	break;
@@ -2417,20 +2378,20 @@ static void test_rzr(void)
 	//bitmap_ascii_dump(width, height, pixels);
 	validate_bitmap(width, height, pixels,
 	"000000002185c8eaebcb8a2700000000\n"
-	"00000284faffe1c1c0ddfffc8f050000\n"
-	"0002b1ffc137003b3b0030b8ffbd0600\n"
-	"0084ff960200005b5b00000088ff9400\n"
-	"21fad6040000007a7a00000002cbfd2e\n"
-	"85ff50a26e0d009e9e000d6ea241fe95\n"
-	"c8e100069bf292d4d492f29b0600d1d8\n"
-	"eab500000064f9fffff964000000a5fa\n"
-	"ebb400000045efffffef45000000a4fb\n"
-	"cbdd00017bf8aedadaaef87b0100cddb\n"
-	"8aff3d9f891f00a7a7001f899f2ffd9a\n"
-	"27fcd70a000000858500000009ccfe35\n"
-	"008fff880000005d5d00000079ff9f00\n"
-	"0005bdffb328003d3d0022a9ffc80a00\n"
-	"00000694fdfed1b4b3cdfdfe9f0a0000\n"
+	"00000284faffe1bfbeddfffc8f050000\n"
+	"0002b1ffc1370033330030b8ffbd0600\n"
+	"0084ff96020000535300000088ff9400\n"
+	"21fad403000000737300000001cafd2e\n"
+	"85ff54a3690b009696000b69a345fe95\n"
+	"c8e10009a0f08ed0d08ef0a00900d1d8\n"
+	"eab50000006afafffffa6a000000a5fa\n"
+	"ebb40000003fedffffed3f000000a4fb\n"
+	"cbdd000076f7b2e0e0b2f7760000cddb\n"
+	"8aff3b9b8e2200b0b000228e9b2dfd9a\n"
+	"27fcd80c0000008e8e0000000bccfe35\n"
+	"008fff88000000656500000079ff9f00\n"
+	"0005bdffb3280045450022a9ffc80a00\n"
+	"00000694fdfed1b7b6cdfdfe9f0a0000\n"
 	"000000002e95d8fafbdb9a3500000000\n"
 	);
 }
@@ -2542,7 +2503,6 @@ static void test_regression_001(void)
 	"00000000000000000000000000000000\n");
 }
 
-#if 0
 static void test_regression_002(void)
 {
 	// A Box(2,2) on a 2x2 canvas would fill everything but the rightmost
@@ -2566,13 +2526,10 @@ static void test_regression_002(void)
 	"ffffffffffff\n"    // ffffffffffaa
 	);
 }
-#endif
 
 int main(int argc, char** argv)
 {
-	#if 0
 	test_regression_002();
-	#endif
 	test_regression_001();
 	test_regression_000();
 	test_spanlist_parser_and_unparser();
@@ -2986,13 +2943,9 @@ int main(int argc, char** argv)
 
 		{
 			struct rzr* rzr = begin_tile(S/2, 16);
-			#if 1
 			Capsule(-0.5, -0.3, 0.7,  0.0, 0.4, 0.1);
 			Capsule(-0.5, -0.3, 0.7,  0.0, 0.35, 0.05);
 			Difference();
-			#else
-			Circle(0.1);
-			#endif
 			Segment(-0.6,  0.4, 0.6,  0.4, 0.1);
 			Union();
 			end_tile();
@@ -3016,7 +2969,7 @@ int main(int argc, char** argv)
 	}
 	#endif
 
-	#if 1
+	#if 0
 	{
 		const int NFRAM = 200;
 		const int S = 128;
@@ -3063,6 +3016,43 @@ int main(int argc, char** argv)
 			end_frame();
 		}
 		end_anim("_rzrdemo_trirot.gif");
+	}
+	#endif
+
+	#if 1
+	{
+		const int NFRAM = 75;
+		const int S = 128;
+		begin_anim(NFRAM, S, S, S/2, 16);
+		for (int i0 = 0; i0 < NFRAM; i0++) {
+			const float d = (float)i0 / (float)NFRAM;
+			struct rzr* rzr = begin_frame();
+
+			Save();
+			Rotate(82);
+			Translate(d*0.24, 0);
+			Pattern(0.02, 0.06, 0.02, 0.04, 0.06, 0.04);
+			Restore();
+
+			Save();
+			Rotate(3*sinf(d * 6.283185307179586f));
+			const float rw=1.8,rh=1.5,rr=0.2,rd=0.05;
+			RoundedBox(rw, rh,rr);
+			Difference();
+			RoundedBox(rw-rd, rh-rd,rr-rd/2);
+			Restore();
+
+			Save();
+			Rotate(22);
+			Translate(d*0.17, 0);
+			Pattern(0.15, 0.02);
+			Restore();
+			Intersection();
+			Union();
+
+			end_frame();
+		}
+		end_anim("_rzrdemo_anim.gif");
 	}
 	#endif
 
