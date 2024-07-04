@@ -2793,7 +2793,7 @@ static void end_anim(const char* path)
 	free(rgba);
 	free(g.anim_data);
 
-	printf("animation of %d frames took %.4fs; wrote %s\n", g.anim_n_frames, dt, path);
+	printf("animation of %d frames took %.4fs; %.5fspf; %.1ffps; wrote %s\n", g.anim_n_frames, dt, dt/(float)g.anim_n_frames, (float)g.anim_n_frames/dt, path);
 }
 
 int main(int argc, char** argv)
