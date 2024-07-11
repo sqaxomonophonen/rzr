@@ -22,3 +22,10 @@ Generated with: `cc -DDEMOS -Wall -O0 -g rzr.c -o demo_rzr -lm && ./demo_rzr`.
 The demo uses `stb_image_write.h` for writing PNGs and `msf_gif.h` for GIFs.
 
 You can also try: `cc -DUNIT_TEST -Wall -O0 -g rzr.c -o test_rzr -lm && ./test_rzr`
+
+## Doodling / Live Coding
+
+See `rzr_doodle.py`, `doodle_demo.c` and the `RZR_DOODLE*` defines in `rzr.c`. It's a huge hack that (when it works)
+allows you to see the results of an rzr render immediately after saving. Like OpenSCAD, but for vector graphics :-)
+
+![](./_doodle.gif)
