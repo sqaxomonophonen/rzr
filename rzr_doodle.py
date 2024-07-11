@@ -86,7 +86,7 @@ class Builder:
 		if self.error: return self.errwait()
 		if not self.update: return self.wait()
 		extra = []
-		if args.ignore_unresolved_symbols is not None: extra += ["-Wl,--unresolved-symbols=ignore-in-object-files"]
+		if args.ignore_unresolved_symbols: extra += ["-Wl,--unresolved-symbols=ignore-in-object-files"]
 		if not run(["cc"] + self.objs + ["-o", EXECUTABLE] + extra + ["-lm"]): return self.errwait()
 		if not run(["./%s" % EXECUTABLE]): return self.errwait()
 		if mtime(IMAGE_PATH) == 0: return self.errwait()
