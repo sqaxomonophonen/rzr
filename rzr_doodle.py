@@ -1,17 +1,66 @@
 #!/usr/bin/env python
 
-import sys, os, time, argparse, subprocess, signal, base64
+import sys, os, time, argparse, subprocess, signal, base64, shutil
+
+IMAGE_PATH = "_rzr_doodle.png"
+EXECUTABLE = "_rzr_doodle"
+
+class SignalRefreshViewer:
+	def __init__(self, exe, sig):
+		self.exe = exe
+		self.path = shutil.which(exe)
+		self.available = self.path is not None
+		self.image_path = IMAGE_PATH
+		self.process = None
+		self.sig = sig
+
+	def load(self):
+		if self.process is None:
+			if not self.available:
+				sys.stderr.write("%s: not available\n" % self.exe)
+				sys.exit(1)
+			self.process = subprocess.Popen([self.path, self.image_path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+		else:
+			self.process.send_signal(self.sig)
+
+	def did_exit(self):
+		return self.process is not None and self.process.poll() is not None
+
+viewers = []
+viewers_not_found = []
+def add_viewer(name, viewer):
+	if not viewer.available:
+		viewers_not_found.append(name)
+		return
+	viewers.append((name, viewer))
+add_viewer("feh", SignalRefreshViewer("feh", signal.SIGUSR1))
+
+if len(viewers) == 0:
+	sys.stderr.write("No supported viewers are available (tried: %s)" % ",".join(viewers_not_found))
+	sys.exit(1)
+
 
 RED_DOT_PNG = base64.b64decode('''iVBORw0KGgoAAAANSUhEUgAAAQAAAAEAAQMAAABmvDolAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURf8AAP///0EdNBEAAAABYktHRAH/Ai3eAAAAH0lEQVRo3u3BAQ0AAADCoPdPbQ43oAAAAAAAAAAAvg0hAAABfxmcpwAAAABJRU5ErkJggg==''') # red.png 256x256 red image
 
 parser = argparse.ArgumentParser(prog = 'rzr_doodle')
 parser.add_argument("c_source_files", nargs='+')
-parser.add_argument("-W", "--width", type=int)
-parser.add_argument("-H", "--height", type=int)
-parser.add_argument("-P", "--pixels-per-unit", type=float)
-parser.add_argument("-S", "--supersample-factor", type=int)
-parser.add_argument("-I", "--ignore-unresolved-symbols", action='store_true')
+parser.add_argument("-W", "--width", type=int, help="default is 256")
+parser.add_argument("-H", "--height", type=int, help="default is to use the width value")
+parser.add_argument("-P", "--pixels-per-unit", type=float, help="default is half of width")
+parser.add_argument("-S", "--supersample-factor", type=int, help="if N is passed, each pixel will be based on NxN samples; default is 12")
+parser.add_argument("-I", "--ignore-unresolved-symbols", action='store_true', help="tells linker to ignore problems with unresolved symbols; useful if your source file has cascading dependencies, but also dangerous because /any/ access to an unresolved symbol crashes. you might prefer using `#ifndef RZR_DOODLE` blocks instead.")
+parser.add_argument("-V", "--viewer", default="feh", type=str, help="available: %s" % ",".join([v[0] for v in viewers]))
 args = parser.parse_args()
+
+viewer = None
+for v in viewers:
+	if v[0] == args.viewer:
+		viewer = v[1]
+		break
+
+if viewer is None:
+	sys.stderr.write("viewer not available: %s\n", args.viewer)
+	sys.exit(1)
 
 def define(k, v=None):
 	if v is None:
@@ -25,23 +74,8 @@ if args.height             is not None: DEFINES += [define("RZR_DOODLE_HEIGHT", 
 if args.pixels_per_unit    is not None: DEFINES += [define("RZR_DOODLE_PIXELS_PER_UNIT", args.pixels_per_unit)]
 if args.supersample_factor is not None: DEFINES += [define("RZR_SUPERSAMPLE_FACTOR", args.supersample_factor)]
 
-IMAGE_PATH = "_rzr_doodle.png"
 DEFINES += [define("RZR_OUTPUT_IMAGE_PATH", '"'+IMAGE_PATH+'"')]
 
-class FEH:
-	def __init__(self, path):
-		self.path = path
-		self.process = None
-
-	def load(self):
-		if self.process is None:
-			self.process = subprocess.Popen(["feh", self.path])
-		else:
-			self.process.send_signal(signal.SIGUSR1)
-
-viewer=FEH(IMAGE_PATH)
-
-EXECUTABLE = "_rzr_doodle"
 
 def mtime(path):
 	try:
@@ -119,7 +153,7 @@ class Builder:
 builder = Builder()
 
 ARTIFACT_MAIN = "_rzr_doodle_main.o"
-while True:
+while not viewer.did_exit():
 	builder.begin()
 	builder.compile(ARTIFACT_MAIN, ["rzr.c", "rzr.h"], ["cc", "-O2"] + DEFINES + ["-c", "rzr.c", "-o", ARTIFACT_MAIN])
 	for src in args.c_source_files:
