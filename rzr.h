@@ -76,6 +76,7 @@ struct rzr {
 	int prg_cap;
 	int prg_length;
 	struct rzr_op* prg;
+	int stack_height;
 
 	int in_poly, poly_op_index;
 
@@ -291,6 +292,25 @@ static inline struct rzr_op* rzr_op(struct rzr* rzr, enum rzr_op_code code)
 	assert(0 <= code && code < RZROP_END);
 	assert(!rzr->in_poly || code == RZROP_VERTEX);
 	op->code = code;
+	switch (code) {
+	case RZROP_ZERO:
+	case RZROP_ONE:
+	case RZROP_CIRCLE:
+	case RZROP_POLY:
+	case RZROP_PICK:
+		rzr->stack_height++;
+		break;
+	case RZROP_UNION:
+	case RZROP_DIFFERENCE:
+	case RZROP_INTERSECTION:
+	case RZROP_DROP:
+		rzr->stack_height--;
+		break;
+	case RZROP_VERTEX:
+	case RZROP_SWAP:
+		break;
+	default: assert(!"unhandled opcode");
+	}
 	return op;
 }
 

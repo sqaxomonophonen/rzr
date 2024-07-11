@@ -1786,15 +1786,36 @@ int main(int argc, char** argv)
 	struct rzr_op* prg = calloc(prg_sz, sizeof prg[0]);
 	const int width = RZR_DOODLE_WIDTH;
 	const int height = RZR_DOODLE_HEIGHT;
-	uint8_t* pixels = malloc(width * height);
 	const double t0 = gettime();
-	rzr_init(&rzr, tx_stack_sz, tx_stack, prg_sz, prg, width, height, RZR_DOODLE_PIXELS_PER_UNIT, RZR_SUPERSAMPLE_FACTOR);
-	rzr_doodle(&rzr);
-	rzr_render(&rzr, scratch_sz, scratch, width, pixels);
+
+	uint8_t* pixels = NULL;
+	const int n_pixels = width*height;
+	int n_drops = 0;
+	int n_rows = 0;
+	for (;;)  {
+		rzr_init(&rzr, tx_stack_sz, tx_stack, prg_sz, prg, width, height, RZR_DOODLE_PIXELS_PER_UNIT, RZR_SUPERSAMPLE_FACTOR);
+		rzr_doodle(&rzr);
+
+		if (rzr.stack_height == 0) {
+			fprintf(stderr, "nothing to draw\n");
+			exit(EXIT_FAILURE);
+		}
+
+		for (int i = 0; i < n_drops; i++) rzr_drop(&rzr);
+
+		if (pixels == NULL) {
+			assert(n_drops == 0);
+			pixels = malloc(n_pixels * rzr.stack_height);
+		}
+		rzr_render(&rzr, scratch_sz, scratch, width, pixels+(n_pixels-1)*n_rows);
+		n_rows++;
+		if (rzr.stack_height == 1) break;
+		n_drops++;
+	}
 	const double dt = gettime() - t0;
 	const char* path = RZR_OUTPUT_IMAGE_PATH;
-	assert(stbi_write_png(path, width, height, 1, pixels, width));
-	printf("Render took %.4f seconds; wrote %s\n", dt, path);
+	assert(stbi_write_png(path, width, height*n_rows, 1, pixels, width));
+	printf("Render took %.4f seconds; n_rows=%d; wrote %s\n", dt, n_rows, path);
 }
 #endif//RZR_DOODLE
 
