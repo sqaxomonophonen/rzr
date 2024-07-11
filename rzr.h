@@ -17,7 +17,9 @@ TODO/FIXME:
 
 #include <assert.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <math.h>
+#include <string.h>
 
 struct rzr_tx {
 	float basis0_x, basis0_y;

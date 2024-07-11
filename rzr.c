@@ -1736,6 +1736,67 @@ void rzr_render(struct rzr* rzr, size_t scratch_cap, void* scratch_stor, int str
 	if (s.cursor_max > rzr->scratch_alloc_max) rzr->scratch_alloc_max = s.cursor_max;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+#if defined(RZR_DOODLE)
+
+#ifndef RZR_DOODLE_WIDTH
+#define RZR_DOODLE_WIDTH (256)
+#endif
+
+#ifndef RZR_DOODLE_HEIGHT
+#define RZR_DOODLE_HEIGHT RZR_DOODLE_WIDTH
+#endif
+
+#ifndef RZR_DOODLE_PIXELS_PER_UNIT
+#define RZR_DOODLE_PIXELS_PER_UNIT ((RZR_DOODLE_WIDTH)>>1)
+#endif
+
+#ifndef RZR_SUPERSAMPLE_FACTOR
+#define RZR_SUPERSAMPLE_FACTOR (12)
+#endif
+
+#ifndef RZR_OUTPUT_IMAGE_PATH
+#define RZR_OUTPUT_IMAGE_PATH "_rzr_doodle.png"
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <assert.h>
+#include <time.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+static inline double gettime(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return 1e-9*(double)ts.tv_nsec + (double)ts.tv_sec;
+}
+
+void rzr_doodle(struct rzr*);
+int main(int argc, char** argv)
+{
+	const size_t scratch_sz = 1<<24;
+	uint8_t* scratch = malloc(scratch_sz);
+	const size_t tx_stack_sz = 1<<10;
+	struct rzr_tx* tx_stack = calloc(tx_stack_sz, sizeof tx_stack[0]);
+	struct rzr rzr;
+	const size_t prg_sz = 1<<12;
+	struct rzr_op* prg = calloc(prg_sz, sizeof prg[0]);
+	const int width = RZR_DOODLE_WIDTH;
+	const int height = RZR_DOODLE_HEIGHT;
+	uint8_t* pixels = malloc(width * height);
+	const double t0 = gettime();
+	rzr_init(&rzr, tx_stack_sz, tx_stack, prg_sz, prg, width, height, RZR_DOODLE_PIXELS_PER_UNIT, RZR_SUPERSAMPLE_FACTOR);
+	rzr_doodle(&rzr);
+	rzr_render(&rzr, scratch_sz, scratch, width, pixels);
+	const double dt = gettime() - t0;
+	const char* path = RZR_OUTPUT_IMAGE_PATH;
+	assert(stbi_write_png(path, width, height, 1, pixels, width));
+	printf("Render took %.4f seconds; wrote %s\n", dt, path);
+}
+#endif//RZR_DOODLE
 
 
 ///////////////////////////////////////////////////////////////////////////////
