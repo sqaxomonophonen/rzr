@@ -4,12 +4,15 @@
  - Stack-based drawing:
    - Shapes (pushes 1): circles, polygons (concave).
    - Boolean operations (pops 2, pushes 1): union, difference, intersection.
- - Helper shapes: line, line pattern, arc, box, rounded box, segment, capsule, triangle, trapezoid and more. See the examples below; they were made with few calls.
+ - Helper shapes: line, line pattern, arc, box, rounded box, segment, capsule, triangle, trapezoid and more.
+   See the examples below; they were made with few calls.
  - Transforms: translate, rotate, scale.
  - Point queries: determines if a point lies inside or outside of your shape (useful for GUI mouseover stuff).
  - "MxN rendering": useful when you want to "stretch" the center of a render, like for UI frames, buttons, etc.
    (There's an example in the unit test, and it's explained better in `rzr.h`).
- - Reasonably fast? Merges subpixel-scanline span lists into `memset()`'able pixel spans.
+ - Reasonably fast? Spans are filled with `memset()`. Your "program" is executed once per subpixel scanline to
+   find subpixel spans that are merged into pixel spans. No-ops are optimized away on an Y-span basis, for instance,
+   a polygon only "steals cycles" on the scanlines it occupies.
  - Depends on libc/libm, but doesn't `malloc()`; you provide the memory it uses.
 
 ## Examples
