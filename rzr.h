@@ -536,18 +536,10 @@ static inline void rzr_box(struct rzr* rzr, float width, float height)
 	rzr_end_poly(rzr);
 }
 
-static inline void rzr_rounded_box(struct rzr* rzr, float width, float height, float radius)
+static inline void rzr_box8(struct rzr* rzr, float width, float height, float radius)
 {
-	if (radius <= 0.0f) {
-		rzr_box(rzr, width, height);
-		return;
-	}
-
-	// FIXME: handle width < radius*2 and height < radius*2
-
 	const float wh = 0.5f*width;
 	const float hh = 0.5f*height;
-
 	rzr_begin_poly(rzr);
 	rzr_vertex(rzr , -wh        , -hh+radius );
 	rzr_vertex(rzr , -wh+radius , -hh        );
@@ -558,7 +550,20 @@ static inline void rzr_rounded_box(struct rzr* rzr, float width, float height, f
 	rzr_vertex(rzr , -wh+radius ,  hh        );
 	rzr_vertex(rzr , -wh        ,  hh-radius );
 	rzr_end_poly(rzr);
+}
 
+static inline void rzr_rounded_box(struct rzr* rzr, float width, float height, float radius)
+{
+	if (radius <= 0.0f) {
+		rzr_box(rzr, width, height);
+		return;
+	}
+
+	// FIXME: handle width < radius*2 and height < radius*2
+
+	rzr_box8(rzr, width, height, radius);
+	const float wh = 0.5f*width;
+	const float hh = 0.5f*height;
 	for (int corner = 0; corner < 4; corner++) {
 		rzr_tx_save(rzr);
 		switch (corner) {
@@ -717,6 +722,7 @@ int  rzr_query(struct rzr*, int x, int y);
 #define Split()                      rzr_split(RZR_INSTANCE)
 #define Arc(a,r,w)                   rzr_arc(RZR_INSTANCE,a,r,w)
 #define Box(w,h)                     rzr_box(RZR_INSTANCE,w,h)
+#define Box8(w,h,r)                  rzr_box8(RZR_INSTANCE,w,h,r)
 #define RoundedBox(w,h,r)            rzr_rounded_box(RZR_INSTANCE,w,h,r)
 #define Segment(x0,y0,x1,y1,r)       rzr_segment(RZR_INSTANCE,x0,y0,x1,y1,r)
 #define Capsule(x0,y0,x1,y1,r0,r1)   rzr_capsule(RZR_INSTANCE,x0,y0,x1,y1,r0,r1)
