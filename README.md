@@ -10,9 +10,6 @@
  - Point queries: determines if a point lies inside or outside of your shape (useful for GUI mouseover stuff).
  - "MxN rendering": useful when you want to "stretch" the center of a render, like for UI frames, buttons, etc.
    (There's an example in the unit test, and it's explained better in `rzr.h`).
- - Reasonably fast? Spans are filled with `memset()`. Your "program" is executed once per subpixel scanline to
-   find subpixel spans that are merged into pixel spans. No-ops are optimized away on an Y-span basis, for instance,
-   a polygon only "steals cycles" on the scanlines it occupies.
  - Depends on libc/libm, but doesn't `malloc()`; you provide the memory it uses.
 
 ## Examples
@@ -21,7 +18,13 @@
 ![](./_rzrdemo_anim.gif)
 ![](./_rzrdemo_sharp.png)
 
-Generated with: `cc -DDEMOS -Wall -O0 -g rzr.c -o demo_rzr -lm && ./demo_rzr`.
+Generated with:
+```
+$ cc -DDEMOS -Wall -O2 rzr.c -o demo_rzr -lm && ./demo_rzr
+Wrote _rzrdemo_sharp.png; render took 0.03639s
+Wrote _rzrdemo_zoo.png; render took 0.01797s
+animation of 75 frames took 0.2167s; 0.00289spf; 346.2fps; wrote _rzrdemo_anim.gif
+```
 
 The demo uses `stb_image_write.h` for writing PNGs and `msf_gif.h` for GIFs.
 
