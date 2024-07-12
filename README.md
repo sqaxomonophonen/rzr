@@ -32,7 +32,7 @@ You can also try: `cc -DUNIT_TEST -Wall -O0 -g rzr.c -o test_rzr -lm && ./test_r
 
 ## Doodling / Live Coding
 
-See `rzr_doodle.py`, `doodle_demo.c` and the `RZR_DOODLE*` defines in `rzr.c`. It's a huge hack that (when it works)
+See `rzr_doodle.py`, `doodle_demo.c` and the `RZR_DOODLE*` defines in `rzr.c`. It's an ugly hack, but when it works it
 allows you to see the results of an rzr render immediately after saving. Like OpenSCAD, but for vector graphics :-)
 
 ![](./_doodle.gif)
