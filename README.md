@@ -21,9 +21,9 @@
 Generated with:
 ```
 $ cc -DDEMOS -Wall -O2 rzr.c -o demo_rzr -lm && ./demo_rzr
-Wrote _rzrdemo_sharp.png; render took 0.03639s
-Wrote _rzrdemo_zoo.png; render took 0.01797s
-animation of 75 frames took 0.2167s; 0.00289spf; 346.2fps; wrote _rzrdemo_anim.gif
+Wrote _rzrdemo_sharp.png; render took 0.04077s
+Wrote _rzrdemo_zoo.png; render took 0.01544s
+animation of 75 frames took 0.2273s; 0.00303spf; 330.0fps; wrote _rzrdemo_anim.gif
 ```
 
 The demo uses `stb_image_write.h` for writing PNGs and `msf_gif.h` for GIFs.

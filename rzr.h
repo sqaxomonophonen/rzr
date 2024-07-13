@@ -6,8 +6,6 @@ TODO/FIXME:
  - Improve robustness of rzr__xline()? It powers "Split", "Line" and "Pattern".
    it probably has numerical problems with near-vertical lines (prevcx~=cx),
    and lines crossing close to corners
- - A circle precalcs/stores a number of values equal to its subpixel radius
-   regardless of image size.
  - `post_order_stack` and `xops` could use proper memory management; see
    comments.
  - The polygon xspan sorting/finding is fragile; see comment; I've also seen

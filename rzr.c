@@ -726,6 +726,79 @@ struct spanline* ystepper_spanline(struct ystepper* ys)
 	return &ys->sub_scanlines[y % ys->supsamp];
 }
 
+struct cirval {
+	int radius;
+	int rr;
+	int has_last_y, last_y, last_x;
+};
+
+static inline void cirval_init(struct cirval* c, int r)
+{
+	c->radius = r;
+	c->rr = (r+r)*(r+r);
+}
+
+static inline int cirval_binsearch(struct cirval* c, int left0, int right0, int dd)
+{
+	int left = left0;
+	int right = right0;
+	while (left < right) {
+		const int x = (left+right) >> 1;
+		const int xx = (x+x+1)*(x+x+2);
+		if (xx > dd) {
+			right = x;
+		} else {
+			left = x + 1;
+		}
+	}
+	return left;
+}
+
+static inline int cirval_get_x_from_y(struct cirval* c, int y)
+{
+	// XXX the weird modifier values here and in binsearch for xx and yy
+	// were found experimentally, and I'm not sure what I'm doing. I
+	// compared against Casey's DDA circle
+	// (https://www.computerenhance.com/p/efficient-dda-circle-outlines)
+	// and chose the values that resulted in fewest errors.
+	const int yy = (y+y-1)*(y+y-1);
+	const int dd = c->rr - yy;
+	int ex;
+	if (c->has_last_y && y == c->last_y+1) {
+		// y asc, x desc
+		const int left0 = c->last_x - 2;
+		if (left0 > 0) {
+			const int ex0 = cirval_binsearch(c, left0, c->last_x, dd);
+			if (ex0 > left0) {
+				ex = ex0;
+			} else {
+				ex = cirval_binsearch(c, 0, c->last_x, dd);
+			}
+		} else {
+			ex = cirval_binsearch(c, 0, c->last_x, dd);
+		}
+	} else if (c->has_last_y && y == c->last_y-1) {
+		// y desc, x asc
+		const int right0 = c->last_x + 2;
+		if (right0 < c->radius) {
+			const int ex0 = cirval_binsearch(c, c->last_x, right0, dd);
+			if (ex0 < right0) {
+				ex = ex0;
+			} else {
+				ex = cirval_binsearch(c, c->last_x, c->radius, dd);
+			}
+		} else {
+			ex = cirval_binsearch(c, c->last_x, c->radius, dd);
+		}
+	} else {
+		ex = cirval_binsearch(c, 0, c->radius, dd);
+	}
+	c->has_last_y = 1;
+	c->last_y = y;
+	c->last_x = ex;
+	return ex;
+}
+
 static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_t* pixels)
 {
 	const int NIL = -1;
@@ -734,8 +807,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 	int* pc2ri = SCRATCH_ALLOCN(n_ops, int);
 	int* pc2ysli = SCRATCH_ALLOCN(n_ops, int);
-	int n_circle = 0;
-	int circle_radius_sum = 0;
 	int faux_stack_height = 0;
 	int max_faux_stack_height = 0;
 	int n_yspan_lists = 0;
@@ -784,10 +855,8 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 		case RZROP_CIRCLE: {
 			assert(n_remaining_vertices == 0);
-			resource_index = n_circle++;
 			yspan_list_index = n_yspan_lists++;
 			stack_delta = 1; // 1 PUSH
-			circle_radius_sum += op->circle.radius;
 		}	break;
 
 		case RZROP_POLY: {
@@ -825,9 +894,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		pc2ysli[pc] = yspan_list_index;
 	}
 	assert(n_remaining_vertices == 0);
-
-	int** circles_xs = SCRATCH_ALLOCN(n_circle, int*);
-	int* xs_storage = SCRATCH_ALLOCN(circle_radius_sum, int);
 
 	struct vertex { int x,y; };
 	struct vertex* vertex_stor = SCRATCH_ALLOCN(n_vertices_total, struct vertex);
@@ -974,62 +1040,10 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 			PUSH(pc);
 
 			const int radius = op->circle.radius;
-			assert((radius > 0) && "XXX can't handle zero-radius circle here (do it elsewhere?)");
+			assert(radius >= 0);
 
 			NEW_YSPAN_LIST();
 			PUSH_YSPAN(op->circle.cy-(radius-1), op->circle.cy+(radius-1), NIL, NIL);
-
-			// "cache" quarter circle
-			assert(xs_storage != NULL);
-			int* xs = xs_storage;
-			xs_storage += radius;
-
-			assert(0 <= ri && ri < n_circle);
-			assert(circles_xs != NULL);
-			circles_xs[ri] = xs;
-
-			// Thank you Casey Muratori for this lovely code :-) ( https://www.computerenhance.com/p/efficient-dda-circle-outlines )
-			const int r2 = radius+radius;
-			int y = 0;
-			int x = radius;
-			int dy = -2;
-			int dx = r2+r2-4;
-			int d = r2-1;
-
-			int* xp = xs;
-			int* xpend = xp + radius;
-			while (y <= x) {
-				assert(xs <= xp && xp < xpend);
-				assert(SCRATCHP->base <= (void*)xp && (void*)xp < (SCRATCHP->base+SCRATCHP->cap));
-				#if 0
-				printf("WRITE/Y xs[%zd] = %d\n", xp-xs, x);
-				#endif
-				*(xp++) = x;
-				d += dy;
-				dy -= 4;
-				y++;
-				if (d < 0) {
-					d += dx;
-					dx -= 4;
-					x--;
-					assert(0 <= x && x < radius);
-					xs[x] = y;
-					assert(x < radius);
-					#if 0
-					printf("WRITE/X xs[%d] = %d\n", x, y);
-					#endif
-				}
-			}
-			#if 0
-			for (int y = 0; y < radius; y++) {
-				const int cx = xs[y];
-				printf("%.3d,%.3d ", cx, y);
-				for (int x = 0; x < radius; x++) {
-					printf("%s", cx > x ? "[]" : "..");
-				}
-				printf("\n");
-			}
-			#endif
 
 		}	break;
 
@@ -1342,8 +1356,8 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 		int opcode;
 		union {
 			struct {
-				int cx,cy,radius;
-				int resource_index;
+				int cx,cy;
+				struct cirval cirval;
 			} circle;
 			struct {
 				int yspans_i0, yspans_i1;
@@ -1431,8 +1445,7 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 					SHAPE_XOP(op->code);
 					xop->circle.cx = op->circle.cx;
 					xop->circle.cy = op->circle.cy;
-					xop->circle.radius = op->circle.radius;
-					xop->circle.resource_index = pc2ri[pc];
+					cirval_init(&xop->circle.cirval, op->circle.radius);
 				}	break;
 
 				case RZROP_POLY: {
@@ -1553,13 +1566,11 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				case RZROP_CIRCLE: {
 					const int cx = xop->circle.cx;
 					const int cy = xop->circle.cy;
-					const int radius = xop->circle.radius;
-					const int ri = xop->circle.resource_index;
+					const int radius = xop->circle.cirval.radius;
 					int ay = y-cy;
 					if (ay < 0) ay = -ay;
-					int* xs = circles_xs[ri];
 					assert(0 <= ay && ay < radius);
-					const int dx = xs[ay];
+					const int dx = cirval_get_x_from_y(&xop->circle.cirval, ay);
 					struct span span = {
 						.x = cx-dx+1,
 						.w = dx+dx-1,
@@ -2459,22 +2470,22 @@ static void test_rzr(void)
 	rzr_render(rzr, scratch_sz, scratch, width, pixels);
 	//bitmap_ascii_dump(width, height, pixels);
 	validate_bitmap(width, height, pixels,
-	"000000002185c8eaebcb8a2700000000\n"
-	"00000284faffe1bfbeddfffc8f050000\n"
-	"0002b1ffc1370033330030b8ffbd0600\n"
-	"0084ff96020000535300000088ff9400\n"
-	"21fad403000000737300000001cafd2e\n"
-	"85ff54a3690b009696000b69a345fe95\n"
-	"c8e10009a0f08ed0d08ef0a00900d1d8\n"
-	"eab50000006afafffffa6a000000a5fa\n"
-	"ebb40000003fedffffed3f000000a4fb\n"
-	"cbdd000076f7b2e0e0b2f7760000cddb\n"
-	"8aff3b9b8e2200b0b000228e9b2dfd9a\n"
-	"27fcd80c0000008e8e0000000bccfe35\n"
-	"008fff88000000656500000079ff9f00\n"
-	"0005bdffb3280045450022a9ffc80a00\n"
-	"00000694fdfed1b7b6cdfdfe9f0a0000\n"
-	"000000002e95d8fafbdb9a3500000000\n"
+	"000000002990d5efefd8962f00000000\n"
+	"0000048cfcffd4b9b9d0fefe97070000\n"
+	"0003b1ffbb2b0033330025b1ffbd0700\n"
+	"0087ff96000000535300000087ff9700\n"
+	"20fad302000000737300000000c9fd2d\n"
+	"83ff55a3690b009696000b69a345ff93\n"
+	"c6e30009a0f08ed0d08ef0a00900d3d6\n"
+	"e7b80000006afafffffa6a000000a8f7\n"
+	"e8b70000003fedffffed3f000000a7f8\n"
+	"c9df000076f7b2e0e0b2f7760000cfd9\n"
+	"88ff3c9b8e2200b0b000228e9b2dfe98\n"
+	"26fcd70c0000008e8e0000000bcbfe34\n"
+	"0092ff87000000656500000077ffa200\n"
+	"0006bdffac1e0045450019a1ffc80b00\n"
+	"0000089cfefcc4b1b1c0faffa70c0000\n"
+	"0000000037a0e5ffffe8a63e00000000\n"
 	);
 }
 
@@ -2569,19 +2580,19 @@ static void test_regression_001(void)
 	validate_bitmap(S, S, pixels,
 	"00000000000000000000000000000000\n"
 	"00000000000000000000000000000000\n"
-	"00000000000005717708000000000000\n"
+	"00000000000005787d09000000000000\n"
 	"00000000000071ffff81000000000000\n"
-	"00000000000077ffff87000000000000\n"
-	"0000000000000881870c000000000000\n"
+	"00000000000076ffff86000000000000\n"
+	"00000000000009888d0e000000000000\n"
 	"00000000000000000000000000000000\n"
 	"00000000000000000000000000000000\n"
 	"00000000000000000000000000000000\n"
-	"0000003b5f5f5f5f5f5f5f5f3f010000\n"
-	"0000b3ffffffffffffffffffffc00300\n"
-	"003bffffffffffffffffffffffff4b00\n"
-	"003fffffffffffffffffffffffff4f00\n"
-	"0001c0ffffffffffffffffffffcc0500\n"
-	"0000034b5f5f5f5f5f5f5f5f4f050000\n"
+	"000002435f5f5f5f5f5f5f5f46040000\n"
+	"0000b7ffffffffffffffffffffc40300\n"
+	"0039ffffffffffffffffffffffff4900\n"
+	"003dffffffffffffffffffffffff4d00\n"
+	"0001c3ffffffffffffffffffffcf0500\n"
+	"000006535f5f5f5f5f5f5f5f56090000\n"
 	"00000000000000000000000000000000\n");
 }
 

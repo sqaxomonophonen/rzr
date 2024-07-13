@@ -1,0 +1,12 @@
+# build artifacts
+*.o
+demo_rzr
+test_rzr
+reference_render_sharp
+_rzr_doodle
+
+# nice to have
+tmp/
+
+# vim
+.*swp
