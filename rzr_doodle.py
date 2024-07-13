@@ -36,7 +36,7 @@ def add_viewer(name, viewer):
 add_viewer("feh", SignalRefreshViewer("feh", signal.SIGUSR1))
 
 if len(viewers) == 0:
-	sys.stderr.write("No supported viewers are available (tried: %s)" % ",".join(viewers_not_found))
+	sys.stderr.write("No supported viewers are available (tried: %s)\n" % ",".join(viewers_not_found))
 	sys.exit(1)
 
 
