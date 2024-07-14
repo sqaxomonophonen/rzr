@@ -343,6 +343,10 @@ static inline void rzr_one(struct rzr* rzr)
 
 static inline void rzr_circle(struct rzr* rzr, float radius)
 {
+	if (radius <= 0.0f) {
+		rzr_zero(rzr);
+		return;
+	}
 	struct rzr_op* op = rzr_op(rzr, RZROP_CIRCLE);
 	struct rzr_tx* tx = rzr_get_current_tx(rzr);
 	op->circle.radius = rzr_float_to_int(radius * rzr_tx_get_scale(tx));
