@@ -10,6 +10,7 @@
  - Point queries: determines if a point lies inside or outside of your shape (useful for GUI mouseover stuff).
  - "MxN rendering": useful when you want to "stretch" the center of a render, like for UI frames, buttons, etc.
    (There's an example in the unit test, and it's explained better in `rzr.h`).
+ - Cropped renders
  - Depends on libc/libm, but doesn't `malloc()`; you provide the memory it uses.
 
 ## Examples
