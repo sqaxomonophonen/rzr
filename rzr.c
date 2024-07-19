@@ -2620,6 +2620,127 @@ static void test_regression_002(void)
 	);
 }
 
+static void test_cropping_calculations(void)
+{
+	struct rzr_tx tx[256];
+	struct rzr_op prg[256];
+	struct rzr rzr;
+	const int S = 256;
+
+	{
+		// no-op crop test
+		rzr_init_cropped(&rzr, ARRAY_LENGTH(tx), tx, ARRAY_LENGTH(prg), prg, S, S, S/2, 16, -1, -1, 1, 1);
+		assert(rzr.virtual_width  == S); assert(rzr.virtual_height == S);
+		assert(rzr.crop_offset_x  == 0); assert(rzr.crop_offset_y  == 0);
+		struct rzr_tx* t = &rzr.tx_stack[0];
+		assert(t->basis0_x == 2048); assert(t->basis0_y == 0);
+		assert(t->origin_x == 2048); assert(t->origin_y == 2048);
+	} {
+		rzr_init_cropped(&rzr, ARRAY_LENGTH(tx), tx, ARRAY_LENGTH(prg), prg, S, S, S/2, 16, 0, -2, 2, 0);
+		assert(rzr.virtual_width  == S);   assert(rzr.virtual_height == S);
+		assert(rzr.crop_offset_x  == S/2); assert(rzr.crop_offset_y  == -S/2);
+		struct rzr_tx* t = &rzr.tx_stack[0];
+		assert(t->basis0_x == 2048); assert(t->basis0_y == 0);
+		assert(t->origin_x == 0); assert(t->origin_y == 4096);
+	} {
+
+		rzr_init_cropped(&rzr, ARRAY_LENGTH(tx), tx, ARRAY_LENGTH(prg), prg, S, S, S/2, 16, -0.5f, -1.5f, 1.5f, 0.5f);
+		assert(rzr.virtual_width  == S);   assert(rzr.virtual_height == S);
+		assert(rzr.crop_offset_x  == S/4); assert(rzr.crop_offset_y  == -S/4);
+		struct rzr_tx* t = &rzr.tx_stack[0];
+		assert(t->basis0_x == 128*16); assert(t->basis0_y == 0);
+		assert(t->origin_x == 1024); assert(t->origin_y == 3072);
+	} {
+		// same upper-left point in crop rect as last test, but rect is
+		// smaller
+		rzr_init_cropped(&rzr, ARRAY_LENGTH(tx), tx, ARRAY_LENGTH(prg), prg, S, S, S/2, 16, -0.5f, -1.5f, 0.5f, 0.0f);
+		assert(rzr.virtual_width  == S/2);   assert(rzr.virtual_height == S*3/4);
+		assert(rzr.crop_offset_x  == S/4); assert(rzr.crop_offset_y  == -S/4);
+		struct rzr_tx* t = &rzr.tx_stack[0];
+		assert(t->basis0_x == 128*16); assert(t->basis0_y == 0);
+		assert(t->origin_x == 1024); assert(t->origin_y == 3072);
+	}
+
+}
+
+static inline float lerp(float t, float a, float b)
+{
+	return a + t*(b-a);
+}
+
+static void test_that_cropping_is_pixel_perfect(void)
+{
+	// this test does several cropped renders of a scene and asserts that
+	// the pixel values don't differ from the reference render. there are
+	// some subpixel subtleties in rzr_init_cropped(), and this test
+	// verifies that there aren't any problems with it.
+
+	struct rzr_tx tx[256];
+	struct rzr_op prg[256];
+	struct rzr rzrstor;
+	struct rzr* rzr = &rzrstor;
+
+	const int S = 24;
+	const int S2 = S*2;
+	uint8_t scratch[1<<16];
+	const size_t scratch_sz = sizeof(scratch);
+	uint8_t reference[S*S];
+	uint8_t pixels[S2*S2];
+
+	const int N = 20;
+	const int supersampling = 16;
+	for (int i = -1; i < N; i++) {
+		if (i == -1) {
+			rzr_init(rzr, ARRAY_LENGTH(tx), tx, ARRAY_LENGTH(prg), prg, S, S, S/2, supersampling);
+		} else {
+			const float t = (float)i / (float)N;
+			const float x0 = lerp(t, -1.0f, -0.75f);
+			const float y0 = lerp(t, -1.0f, -0.6f);
+			const float x1 = lerp(t,  1.4f, 0.8f);
+			const float y1 = lerp(t,  1.0f, 0.2f);
+			rzr_init_cropped(rzr, ARRAY_LENGTH(tx), tx, ARRAY_LENGTH(prg), prg, S, S, S/2, supersampling, x0, y0, x1, y1);
+		}
+		const int w = rzr->bitmap_width;
+		const int h = rzr->bitmap_height;
+		assert(i == -1 || (w <= S2 && h <= S2));
+		Save();
+		Rotate(11);
+		Translate(0.1,-0.1);
+		Star(6, 0.6, 0.2);
+		Restore();
+		Circle(0.2);
+		Difference();
+		uint8_t* dst = i == -1 ? reference : pixels;
+		memset(dst, 0xfe, w*h);
+		rzr_render(rzr, scratch_sz, scratch, w, dst);
+		#if 0
+		// display frames
+		printf("\n");
+		bitmap_ascii_dump(w, h, dst);
+		#endif
+		if (i >= 0) {
+			const int offx = rzr->crop_offset_x;
+			const int offy = rzr->crop_offset_y;
+			for (int y = 0; y < h; y++) {
+				for (int x = 0; x < h; x++) {
+					const int refx = offx+x;
+					const int refy = offy+y;
+					assert(0 <= refx && refx < S);
+					assert(0 <= refy && refy < S);
+					if (pixels[x+y*w] != reference[refx+refy*S]) {
+						fprintf(stderr, "bad bitmap check for i=%d at [%d,%d] in pix vs [%d,%d] in ref\n", i, x, y, refx, refy);
+						printf("reference:\n");
+						bitmap_ascii_dump(S, S, reference);
+						printf("cropped render:\n");
+						bitmap_ascii_dump(w, h, pixels);
+						abort();
+					}
+				}
+			}
+		}
+	}
+}
+
 int main(int argc, char** argv)
 {
 	test_regression_002();
@@ -2635,6 +2756,8 @@ int main(int argc, char** argv)
 	test_subrender();
 	test_rzr();
 	test_3x3();
+	test_cropping_calculations();
+	test_that_cropping_is_pixel_perfect();
 	printf("TESTS: OK\n");
 	return EXIT_SUCCESS;
 }

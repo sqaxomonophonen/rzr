@@ -67,6 +67,8 @@ struct rzr {
 	int virtual_width, virtual_height;
 	int supersampling_factor;
 
+	int crop_offset_x, crop_offset_y;
+
 	int tx_stack_cap;
 	int tx_stack_height;
 	struct rzr_tx* tx_stack;
@@ -117,7 +119,7 @@ static inline void rzr__init_common(struct rzr* rzr, int tx_stack_cap, struct rz
 
 	rzr->tx_stack_height = 1;
 	rzr->tx_stack_height_max = rzr->tx_stack_height;
-	struct rzr_tx* tx0 = &rzr->tx_stack[rzr->tx_stack_height-1];
+	struct rzr_tx* tx0 = &rzr->tx_stack[0];
 	tx0->basis0_x = subpixels_per_unit;
 	tx0->basis0_y = 0.0f;
 	tx0->origin_x = (float)(virtual_width*ssf)  * 0.5f;
@@ -130,13 +132,38 @@ static inline void rzr__init_common(struct rzr* rzr, int tx_stack_cap, struct rz
 
 	rzr->n_widths = 1;
 	rzr->n_heights = 1;
-	rzr->widths[0]  = virtual_width;;
+	rzr->widths[0]  = virtual_width;
 	rzr->heights[0] = virtual_height;
 }
 
+// rzr_init() configures an rzr render
 static inline void rzr_init(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx_stack, int prg_cap, struct rzr_op* prg, int width, int height, float pixels_per_unit, int supersampling_factor)
 {
 	rzr__init_common(rzr, tx_stack_cap, tx_stack, prg_cap, prg, pixels_per_unit, supersampling_factor, width, height, width, height);
+}
+
+// rzr_init_cropped() configures a cropped rzr render, but is otherwise the
+// same as rzr_init(). the crop snaps to pixels, and after calling
+// rzr_init_cropped() you can read out the crop offset in crop_offset_x and
+// crop_offset_y, and the bitmap size in bitmap_width and bitmap_height.
+static inline void rzr_init_cropped(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx_stack, int prg_cap, struct rzr_op* prg, int width, int height, float pixels_per_unit, int supersampling_factor, float crop_x0, float crop_y0, float crop_x1, float crop_y1)
+{
+	rzr__init_common(rzr, tx_stack_cap, tx_stack, prg_cap, prg, pixels_per_unit, supersampling_factor, width, height, width, height);
+	const float midx = 0.5f * (float)width;
+	const float midy = 0.5f * (float)height;
+	const int nx0 = (int)floorf(crop_x0 * pixels_per_unit + midx);
+	const int ny0 = (int)floorf(crop_y0 * pixels_per_unit + midy);
+	const int nx1 =  (int)ceilf(crop_x1 * pixels_per_unit + midx);
+	const int ny1 =  (int)ceilf(crop_y1 * pixels_per_unit + midy);
+	rzr->crop_offset_x = nx0;
+	rzr->crop_offset_y = ny0;
+	const int nw = nx1-nx0, nh = ny1-ny0;
+	rzr->widths[0]  = rzr->virtual_width  = rzr->bitmap_width  = nw;
+	rzr->heights[0] = rzr->virtual_height = rzr->bitmap_height = nh;
+	const int ssf = rzr_get_supersampling_factor(rzr);
+	struct rzr_tx* tx0 = &rzr->tx_stack[0];
+	tx0->origin_x =  ((float)rzr->virtual_width*ssf + 2.0f*midx*(float)ssf - (float)(ssf*(nx0+nx1))) * 0.5f;
+	tx0->origin_y = ((float)rzr->virtual_height*ssf + 2.0f*midy*(float)ssf - (float)(ssf*(ny0+ny1))) * 0.5f;
 }
 
 // rzr_init_MxN() configures rzr to render a M x N grid. `widths` and `heights`
@@ -145,15 +172,13 @@ static inline void rzr_init(struct rzr* rzr, int tx_stack_cap, struct rzr_tx* tx
 // and 0 units wide/high.
 // Example: widths  = [10, -1, 20, 0] (or: [10, "stretch", 20, "end"])
 //          heights = [15, -1, 25, 0] (or: [15, "stretch", 25, "end"])
-//          pixels_per_units = 10
+//          pixels_per_unit = 10
 //    +---+-+---+
-//    |a  |b|  c|
-//    |   | |   |
+//    |a  |b|  c| (not to scale)
 //    |   | |   |
 //    +---+-+---+
 //    |d  |e|  f|
 //    +---+-+---+
-//    |   | |   |
 //    |   | |   |
 //    |g  |h|  i|
 //    +---+-+---+
