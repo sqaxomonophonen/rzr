@@ -253,7 +253,8 @@ static inline struct rzr_tx* rzr_get_current_tx(struct rzr* rzr)
 static inline void rzr_tx_save(struct rzr* rzr)
 {
 	assert(rzr->tx_stack_height < rzr->tx_stack_cap);
-	rzr->tx_stack[rzr->tx_stack_height++] = *rzr_get_current_tx(rzr);
+	rzr->tx_stack[rzr->tx_stack_height] = *rzr_get_current_tx(rzr);
+	rzr->tx_stack_height++;
 	if (rzr->tx_stack_height > rzr->tx_stack_height_max) {
 		rzr->tx_stack_height_max = rzr->tx_stack_height;
 	}

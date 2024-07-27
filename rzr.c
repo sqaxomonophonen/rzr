@@ -394,12 +394,6 @@ static inline int get_next_skip(int n_sizes, const int* sizes, int current_value
 	return -1;
 }
 
-static inline int get_next_yskip(struct rzr* rzr, int current_y)
-{
-	return get_next_skip(rzr->n_heights, rzr->heights, current_y);
-}
-
-
 struct spanline {
 	int n;
 	struct span* spans;
@@ -1250,7 +1244,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 
 	// setup stuff for polygon span rendering
 	struct poly_xedge* xedges_stor = SCRATCH_TAIL_ALLOC_BEGIN(struct poly_xedge);
-	int n_xspans = 0;
 	for (int i0 = 0; i0 < n_polys; i0++) {
 		struct poly* poly = &polys[i0];
 		const int vertex_count  = poly->vertex_count;
@@ -1336,7 +1329,6 @@ static void render(struct rzr* rzr, struct scratch* SCRATCHP, int stride, uint8_
 				assert(xe->side == (i2&1));
 			}
 			yspan->xspan_count = n_xedges >> 1;
-			n_xspans += yspan->xspan_count;
 		}
 	}
 	SCRATCH_TAIL_ALLOC_END();
