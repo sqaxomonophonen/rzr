@@ -3271,6 +3271,144 @@ int main(int argc, char** argv)
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+#ifdef VISUAL_TEST
+// cc -DVISUAL_TEST -Wall -O0 -g rzr.c -o vis_rzr -lm && ./vis_rzr
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
+#define N_TX (1<<10)
+#define N_PRG (1<<10)
+#define SCRATCH_SZ (1<<24)
+
+static struct {
+	struct rzr rzr;
+	struct rzr_tx tx[N_TX];
+	struct rzr_op prg[N_PRG];
+	uint8_t scratch[SCRATCH_SZ];
+} g;
+
+static void test_midpoints(void)
+{
+	// Scratching an itch, making sure that renders of the same "scene",
+	// but at different resolutions, dont't have different "midpoints",
+	// "off by a half-pixel" problems and such. This test superimposes a
+	// hi-res render on top of a low-res render. The low-res render pixel
+	// values must correspond to the pixel coverage of the hi-res render,
+	// i.e. if a pixel is 50% covered, the pixel value should be 50%.
+
+	// XXX/TODO
+	//  - Test seems to pass when D is a power-of-two, but not if, say,
+	//    D=37? Root mean square error seems to confirm this.
+	//  - Try small translations? Maybe smoothly over time using .gif
+	//    output?
+
+	const int S1 = 1024;
+	const int D = 32; // XXX try different value, especially non-power-of-two or odd values; something's broken
+	const int S0 = S1/D;
+	const int NCOMP = 3;
+	uint8_t* out = malloc(S1*S1*NCOMP);
+	uint8_t* rb0 = malloc(S0*S0);
+	uint8_t* rb1 = malloc(S1*S1);
+
+	for (int pass = 0; pass < 2; pass++) {
+		const int S = (pass==0) ? S0 : S1;
+		struct rzr* rzr = &g.rzr;
+		rzr_init(rzr, N_TX, g.tx, N_PRG, g.prg, S, S, S/2, 16);
+
+		BeginPoly();
+		Vertex( 0.2, -0.8);
+		Vertex( 0.9,  0.1);
+		Vertex(-0.8,  0.4);
+		EndPoly();
+		Circle(0.21);
+		Difference();
+
+		uint8_t* rb = (pass==0) ? rb0 : rb1;
+		rzr_render(rzr, SCRATCH_SZ, g.scratch, S, rb);
+
+		if (pass == 0) {
+			assert(S==S0);
+			uint8_t* srcp = rb;
+			for (int y0 = 0; y0 < S; y0++) {
+				for (int x0 = 0; x0 < S; x0++) {
+					uint8_t src = *(srcp++);
+					uint8_t* dstp = out + (((x0*D) + (y0*D*S1))*NCOMP);
+					for (int y1 = 0; y1 < D; y1++) {
+						for (int x1 = 0; x1 < D; x1++) {
+							const int is_border = (x1==0) || (y1==0) || (x1==(D-1)) || (y1==(D-1));
+							const uint8_t v = is_border ? 0 : src;
+							for (int i = 0; i < NCOMP; i++) *(dstp++) = v;
+						}
+						dstp += (S1-D)*NCOMP;
+					}
+				}
+			}
+		} else if (pass == 1) {
+			assert(S==S1);
+			uint8_t* srcp = rb;
+			uint8_t* outp = out;
+			for (int y = 0; y < S; y++) {
+				for (int x = 0; x < S; x++) {
+					uint8_t s = *(srcp++);
+					for (int i = 0; i < NCOMP; i++) {
+						uint8_t d = *(outp);
+						*(outp) = (i==2) ? s : d;
+						outp++;
+					}
+				}
+			}
+		} else {
+			assert(!"UNREACHABLE");
+		}
+	}
+
+	double rmse;
+	{
+		double rmse_sqr = 0;
+		for (int y = 0; y < S0; y++) {
+			for (int x = 0; x < S0; x++) {
+				int acc = 0;
+				for (int dy = 0; dy < D; dy++) {
+					for (int dx = 0; dx < D; dx++) {
+						acc += (int)rb1[ x*D+dx + (y*D+dy)*S1 ];
+					}
+				}
+				const double hiavg = (double)(acc+(D*D)/2)/(double)(D*D);
+				const int loval = rb0[ x + y*S0 ];
+				const double dd = (hiavg-loval);
+				rmse_sqr += dd*dd;
+			}
+		}
+		rmse = sqrt(rmse_sqr / (double)(S0*S0));
+	}
+
+	const char* path = "_rzrvis_midpoints.png";
+	assert(stbi_write_png(path, S1, S1, NCOMP, out, S1*NCOMP));
+	free(out);
+	printf("Wrote %s; root mean square error is %f\n", path, rmse);
+
+}
+
+int main(int argc, char** argv)
+{
+	test_midpoints();
+	return EXIT_SUCCESS;
+}
+
+#endif//VISUAL_TEST
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
+
+
 /*
 ------------------------------------------------------------------------------
 This software is available under 2 licenses -- choose whichever you prefer.

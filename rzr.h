@@ -3,6 +3,8 @@
 /*
 TODO/FIXME:
  - Allow out-of-memory errors without crashing?
+ - test_midpoints() in rzr.c has unresolved problems regarding subpixel
+   positioning at various scales.
  - Improve robustness of rzr__xline()? It powers "Split", "Line" and "Pattern".
    it probably has numerical problems with near-vertical lines (prevcx~=cx),
    and lines crossing close to corners
