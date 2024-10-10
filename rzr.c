@@ -1826,7 +1826,7 @@ int main(int argc, char** argv)
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 #ifdef UNIT_TEST
-// cc -DUNIT_TEST -Wall -O0 -g rzr.c -o test_rzr -lm && ./test_rzr
+// cc -DUNIT_TEST -fsanitize=undefined -Wall -O0 -g rzr.c -o test_rzr -lm && ./test_rzr
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -2761,7 +2761,7 @@ int main(int argc, char** argv)
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 #ifdef DEMOS
-// cc -DDEMOS -Wall -O0 -g rzr.c -o demo_rzr -lm && ./demo_rzr
+// cc -DDEMOS -fsanitize=undefined -Wall -O0 -g rzr.c -o demo_rzr -lm && ./demo_rzr
 //   or
 // cc -DDEMOS -Wall -O2 rzr.c -o demo_rzr -lm && ./demo_rzr
 
